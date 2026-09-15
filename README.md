@@ -307,8 +307,9 @@ END = "00:15"    # None — до конца
 of the original MP4 with its telemetry: 5–10 s, not re‑encoded, ideally with a
 note of where it judders. Clips where the tool does not help are just as useful.*
 
-Контакт / contact: parhipov@gmail.com или [Issues](https://github.com/parhipov/DJIFix/issues)
-(файл выложите на любой файлообменник и дайте ссылку).
+Куда: закреплённый issue «Clips wanted» в [Issues](https://github.com/parhipov/DJIFix/issues),
+файл на любой файлообменник, в issue ссылку. Личный контакт есть на профиле GitHub.
+*Where: the pinned «Clips wanted» issue; upload the file anywhere and post the link.*
 
 ## Лицензия
 
