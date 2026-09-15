@@ -1,5 +1,7 @@
 # GyroGate fix: repairing DJI O4 / O4 Pro telemetry for Gyroflow
 
+**English** | [Русский](README.ru.md)
+
 **The bug ("GyroGate").** Since February 2026 DJI ships the O4 Pro air unit with a
 different gyro, the ICM‑40609‑D (marked I469D), the same part the O4 Lite has had
 since launch. Footage from many of these units is fine straight from the camera
@@ -29,8 +31,8 @@ fixed telemetry appears next to the clip.
 
 *O4 Pro, calm flight, roll increment per frame: red is DJI's telemetry, grey is
 the rotation measured from the video, green is the repaired telemetry.
-More in [`examples/`](examples/). Docs below are in Russian;
-[`docs/HANDOFF.md`](docs/HANDOFF.md) §0 has the technical state in English.*
+More in [`examples/`](examples/); [`docs/HANDOFF.md`](docs/HANDOFF.md) §0 has the
+technical state.*
 
 **Related tools.** [DJI_04_Air_Unit_Gyro_Patcher](https://github.com/gmatocha/DJI_04_Air_Unit_Gyro_Patcher)
 finds burst glitches by their magnitude and bridges them with SLERP;
@@ -41,228 +43,215 @@ is measured against the image, single‑frame spikes are removed without touchin
 their neighbours, roll jitter is repaired as well, and the result is a separate
 motion‑data file.
 
----
-
-**Баг («GyroGate»).** С февраля 2026 DJI ставит в O4 Pro другой гироскоп,
-ICM‑40609‑D (маркировка I469D), тот же, что стоит в O4 Lite с самого начала.
-Видео с многих таких блоков прямо с камеры выглядит нормально, а после
-стабилизации дёргается, что в RockSteady, что в Gyroflow. DJI смену сенсора
-подтвердила, исправления не выпустила. В файл камера пишет не сырой гироскоп,
-а *слитую ориентацию* (кватернионы в дорожке `djmd`), и эта ориентация
-расходится с тем, что камера делала на самом деле:
-
-- **одиночные выбросы:** отдельные кадры сообщают скачок рыскания или тангажа
-  до 1.8° (88 °/с), которого не было, и Gyroflow дёргает кадр на один кадр;
-- **дрожание крена:** телеметрия качает крен примерно на 0.1° от кадра к кадру,
-  хотя картинка гладкая (≈0.01° по измерению с того же видео), и кадр мелко
-  дрожит по часовой и против даже в спокойном полёте.
-
-Никакое сглаживание не убирает ошибку в одном кадре, не размазав её на соседние,
-а Gyroflow ни при чём: он читает ровно то, что записала DJI (сверено с его
-собственным экспортом, 1e‑3°).
-
-**Исправление.** Инструмент измеряет реальное вращение камеры по самому видео,
-исправляет по нему телеметрию покадрово и отдаёт Gyroflow отдельным файлом
-**данных движения** (Motion data). Видео не меняется.
-
-## Быстрый старт
+## Quick start
 
 ```bat
 fix_telemetry.bat "F:\36\video.MP4"
 ```
 
-или
+or
 
 ```bash
 python src/main.py "F:\36\video.MP4"
 ```
 
-Результат — два файла рядом с видео:
+The result is two files next to the video:
 
-| файл | что |
+| file | what |
 |---|---|
-| `<имя>_telemetry_fixed.mp4` | ~5 МБ, загрузить в Gyroflow: Motion data → открыть файл |
-| `<имя>_overview.png` | три панели угловых скоростей: телеметрия, картинка, исправлено; события залиты красным, выбросы — фиолетовые линии |
+| `<name>_telemetry_fixed.mp4` | ~5 MB, load into Gyroflow: Motion data → open file |
+| `<name>_overview.png` | three panels of angular rates: telemetry, image, fixed; events shaded red, spikes marked by purple lines |
 
-Остальное промежуточное удаляется; `--keep` оставляет его рядом с видео:
+Everything else intermediate is deleted; `--keep` leaves it next to the video:
 
-| файл | что |
+| file | what |
 |---|---|
-| `<имя>_00_control.mp4` | тот же тайминг, содержимое не тронуто — контроль для A/B |
-| `<имя>_image.npz` | измерение вращения по картинке, кэш (~0,17 с на кадр 4K, переиспользуется) |
-| `<имя>_fix_report.json` | что и на сколько исправлено, список событий с проверкой |
-| `<имя>_verify.json` | суд по картинке: тайминг, дрожание крена по полосам скорости, тангаж/рыскание |
+| `<name>_00_control.mp4` | same timing, contents untouched — the control for an A/B |
+| `<name>_image.npz` | the rotation measured from the image, cached (~0.17 s per 4K frame, reused) |
+| `<name>_fix_report.json` | what was corrected and by how much, the list of events with their verification |
+| `<name>_verify.json` | the image's verdict: timing, roll jitter by speed band, pitch/yaw |
 
-Если на камере не стоковая линза, укажите профиль Gyroflow, например для O4 Lite
-с Flywoo O4 Wide: `fix_telemetry.bat "F:\clip.MP4" --lens flywoo`
-(см. `lens_profiles/README.md`).
+If the camera does not have the stock lens, name a Gyroflow profile — for an O4
+Lite with the Flywoo O4 Wide, for example: `fix_telemetry.bat "F:\clip.MP4" --lens flywoo`
+(see `lens_profiles/README.md`).
 
-Ключи `main.py`: `--keep`, `--plots` (ещё три графика: крен, тангаж/рыскание,
-коррекция), `--no-plots` (не рисовать вообще ничего), `--lens`,
-`--artifacts` (писать в `artifacts/main/<имя>/`, для разработки), `-o ПАПКА`,
-`--no-image` (без прохода по видео: тайминг + винер), `--backend gpu` (трекинг на
-GPU через OpenCL, вдвое быстрее, но измерение слегка другое: меняется часть
-вердиктов по событиям тангажа/рыскания — не смешивайте бэкенды на одном клипе),
-`--remeasure`, `--gain 0.7`,
-`--r0`, `--no-events`, `--timing dbgi` (старое выравнивание для A/B), `--extract`,
-`--no-verify`, `--gyroflow ПУТЬ` (Gyroflow.exe для финальной сверки; по умолчанию
-переменная окружения `GYROFLOW`, затем стандартные папки установки; без Gyroflow
-сверка пропускается). Тонкие параметры событий доступны в
-`src/fix_pipeline.py` (см. `--help`). Зависимости: `numpy`, `scipy`, `opencv-python`
-(`matplotlib` для графиков; без него всё остальное работает, обзорная картинка
-просто не рисуется).
+`main.py` flags: `--keep`, `--plots` (three more plots: roll, pitch/yaw,
+correction), `--no-plots` (draw nothing at all), `--lens`, `--artifacts` (write
+into `artifacts/main/<name>/`, for development), `-o DIR`, `--no-image` (skip the
+video pass: timing + Wiener), `--backend gpu` (tracking on the GPU through
+OpenCL, twice as fast, but the measurement is slightly different: some pitch/yaw
+event verdicts change — do not mix backends on one clip), `--remeasure`,
+`--gain 0.7`, `--r0`, `--no-events`, `--timing dbgi` (the old alignment, for
+A/B), `--extract`, `--no-verify`, `--gyroflow PATH` (Gyroflow.exe for the final
+cross‑check; by default the `GYROFLOW` environment variable, then the standard
+install folders; without Gyroflow the cross‑check is skipped). The fine event
+parameters live in `src/fix_pipeline.py` (see `--help`). Dependencies: `numpy`,
+`scipy`, `opencv-python` (`matplotlib` for the plots; without it everything else
+still works, the overview picture simply is not drawn).
 
-## Что исправляется и почему
+## What is fixed and why
 
-1. **Тайминг.** Gyroflow читает ориентацию кадра в момент `pts` (середина строк
-   при включённой коррекции rolling shutter), одинаково для встроенной и внешней
-   телеметрии. Измерено по картинке на двух камерах: `pts` верен с точностью ~1 мс.
-   Постоянный сдвиг поэтому измеряется на клипе (выходит ≈0), а покадрово
-   добавляется половина изменения экспозиции относительно медианы. Старое
-   выравнивание по опоре из `dbgi` (`align.py`, +10.5 мс на Pro) опаздывало на
-   ~10 мс: на Lite та же опора даёт сдвиг другого знака.
-2. **Крен.** Слитая ориентация DJI дрожит по крену на ~0.12°/кадр независимо от
-   реального движения. Крен, измеренный по картинке (чистое вращение лучей между
-   соседними кадрами, `measure_rotation.py`), заменяет его выше 4 Гц с весом по
-   скорости (R0 = 40 °/с), как в `rollfix.py`. Ось крена — z системы телеметрии
-   (совпадение осей с камерой подтверждено оконной гомографией на быстрых участках).
-3. **Шум тангажа/рыскания.** Винеровская кривая усиления выше 4 Гц, при
-   возможности калибруется на клипе, ниже 4 Гц ничего не трогается.
-4. **Выбросы и события тангажа/рыскания.** Главный дефект Lite оказался
-   одиночными выбросами слитой ориентации: скачок рыскания на 1.77° за один кадр
-   при 0.3° у соседей (55.72 с), Gyroflow честно дёргает кадр. Такие кадры ищутся
-   по самой телеметрии (отклонение от локальной медианы ≥0.35°/кадр),
-   подтверждаются картинкой (она скачка не показывает) и возвращаются на
-   локальную медиану ещё до всех фильтров, чтобы фильтры выброс не «видели»
-   (иначе винер размазывает его на соседние кадры).
-   Более длинные события (расхождение картинки и телеметрии ≥0.1°/кадр и не
-   менее половины самого движения, ≥0.1 с) правятся по покадровой форме
-   картинки с нулевым итогом за окно. Каждое событие независимо проверяется по
-   каналам сдвига аффинного потока; применяются только подтверждённые (и
-   выбросы), неясные и противоречащие отбрасываются (`fix_pipeline.py --unclear-weight`).
-   Потолка на величину нет (`fix_pipeline.py --event-max-deg`). Визуально проверено
-   пользователем на обоих клипах 2026‑09‑15.
+1. **Timing.** Gyroflow reads a frame's attitude at `pts` (the middle row when
+   rolling‑shutter correction is on), the same way for embedded and for external
+   telemetry. Measured from the image on two cameras: `pts` is correct to ~1 ms.
+   A constant shift is therefore measured on the clip (it comes out ≈0), and per
+   frame half the change of exposure relative to the median is added. The old
+   alignment against the `dbgi` anchor (`align.py`, +10.5 ms on the Pro) was
+   ~10 ms late: on the Lite the same anchor gives a shift of the opposite sign.
+2. **Roll.** DJI's fused attitude trembles in roll by ~0.12°/frame regardless of
+   the real motion. The roll measured from the image (pure rotation of the rays
+   between neighbouring frames, `measure_rotation.py`) replaces it above 4 Hz
+   with a speed‑dependent weight (R0 = 40 °/s), as in `rollfix.py`. The roll axis
+   is z of the telemetry frame (its agreement with the camera axes was confirmed
+   by a windowed homography on the fast sections).
+3. **Pitch/yaw noise.** A Wiener gain curve above 4 Hz, calibrated on the clip
+   where possible; below 4 Hz nothing is touched.
+4. **Spikes and pitch/yaw events.** The Lite's main defect turned out to be
+   single‑frame spikes of the fused attitude: a yaw jump of 1.77° in one frame
+   against 0.3° in its neighbours (55.72 s), and Gyroflow honestly yanks the
+   frame. Such frames are found from the telemetry itself (deviation from the
+   local median ≥0.35°/frame), confirmed against the image (which shows no jump)
+   and returned to the local median before all the filters, so that the filters
+   never "see" the spike (otherwise the Wiener filter smears it onto the
+   neighbouring frames).
+   Longer events (image and telemetry diverging by ≥0.1°/frame and by at least
+   half of the motion itself, ≥0.1 s) are corrected to the per‑frame shape of the
+   image with a zero total over the window. Every event is independently checked
+   against the shift channels of the affine flow; only confirmed events (and the
+   spikes) are applied, unclear and contradicting ones are dropped
+   (`fix_pipeline.py --unclear-weight`). There is no ceiling on the magnitude
+   (`fix_pipeline.py --event-max-deg`). Visually checked by the user on both
+   clips on 2026‑09‑15.
 
-Все шаги измеряются, а не предполагаются: `verify_fix.py` судит любой sidecar
-по картинке без рендера, `main.py` в конце проверяет через Gyroflow CLI, что
-Gyroflow читает файл ровно так, как он записан (расхождение 1e‑3°).
+Every step is measured, not assumed: `verify_fix.py` judges any sidecar against
+the image without a render, and at the end `main.py` checks through the Gyroflow
+CLI that Gyroflow reads the file exactly as it was written (discrepancy 1e‑3°).
 
-## Результат
+## Results
 
-Короткие куски в `examples/`, по одному дефекту на камеру:
+Short pieces in `examples/`, one defect per camera:
 
-| | до | после | по картинке |
+| | before | after | from the image |
 |---|---|---|---|
-| O4 Pro, дрожание крена на спокойных 3 с, °/кадр | 0.11 | 0.019 | 0.0075 |
-| O4 Lite, скачок рыскания в кадре 55.72 с, ° | 1.76 | 0.03 | 0.24 |
-| O4 Lite, скачок рыскания в кадре 55.82 с, ° | 0.68 | 0.00 | 0.17 |
+| O4 Pro, roll jitter over a calm 3 s, °/frame | 0.11 | 0.019 | 0.0075 |
+| O4 Lite, yaw jump at frame 55.72 s, ° | 1.76 | 0.03 | 0.24 |
+| O4 Lite, yaw jump at frame 55.82 s, ° | 0.68 | 0.00 | 0.17 |
 
-Полные клипы, 92 с каждый. Дрожание крена здесь — среднеквадратичное изменение
-скорости крена от кадра к кадру, °/кадр. «Картинка» — то же самое, измеренное
-по видео; ниже этого телеметрия опуститься не может.
+Full clips, 92 s each. Roll jitter here is the RMS frame‑to‑frame change of the
+roll rate, °/frame. "Image" is the same quantity measured from the video; the
+telemetry cannot go below that.
 
-| клип | участок | до | после | картинка |
+| clip | band | before | after | image |
 |---|---|---|---|---|
-| O4 Pro | спокойный <20 °/с | 0.075 | 0.044 | 0.037 |
-| O4 Pro | 20–60 °/с | 0.090 | 0.074 | 0.059 |
-| O4 Pro | быстрый >60 °/с | 0.85 | 0.85 | 0.72 |
-| O4 Lite | спокойный <20 °/с | 0.051 | 0.046 | 0.041 |
-| O4 Lite | 20–60 °/с | 0.089 | 0.088 | 0.080 |
-| O4 Lite | быстрый >60 °/с | 0.45 | 0.46 | 0.30 |
+| O4 Pro | calm <20 °/s | 0.075 | 0.044 | 0.037 |
+| O4 Pro | 20–60 °/s | 0.090 | 0.074 | 0.059 |
+| O4 Pro | fast >60 °/s | 0.85 | 0.85 | 0.72 |
+| O4 Lite | calm <20 °/s | 0.051 | 0.046 | 0.041 |
+| O4 Lite | 20–60 °/s | 0.089 | 0.088 | 0.080 |
+| O4 Lite | fast >60 °/s | 0.45 | 0.46 | 0.30 |
 
-На полном клипе Lite убрано 11 выбросов: 19.76, 25.78, 25.98, 26.10,
-37.24–37.34, 41.14, 55.72, 55.82 и 91.54 с. Расхождение тангажа и рыскания
-с картинкой по 99‑му процентилю 0.59 → 0.50 °/кадр. Крен у Lite и так почти
-чистый. Выше 60 °/с ничего не правится: картинка смазана, телеметрия там
-точнее неё. Правки тангажа и рыскания на Pro проверены только глазами,
-картинка занижает их величину (см. «Ограничения»). Отчёты `<имя>_verify.json`
-и `<имя>_fix_report.json` остаются рядом с видео при `--keep`.
+On the full Lite clip 11 spikes were removed: 19.76, 25.78, 25.98, 26.10,
+37.24–37.34, 41.14, 55.72, 55.82 and 91.54 s. The pitch and yaw disagreement with
+the image at the 99th percentile went 0.59 → 0.50 °/frame. The Lite's roll is
+nearly clean as it is. Above 60 °/s nothing is corrected: the image is blurred
+and the telemetry is more accurate than it is there. The pitch and yaw
+corrections on the Pro have only been checked by eye — the image understates
+their magnitude (see "Limitations"). The `<name>_verify.json` and
+`<name>_fix_report.json` reports stay next to the video with `--keep`.
 
-## Примеры
+## Examples
 
-В `examples/` два коротких куска с телеметрией, по одному на камеру, с
-`run.bat`, результатом и графиками. Сами клипы (~70 МБ каждый) в репозиторий
-не входят: скачайте `o4pro_13-17s.MP4` и `o4lite_53-58s.MP4` со страницы
-Releases и положите в соответствующие папки; `run.bat` без клипа подскажет то же.
+`examples/` holds two short pieces with telemetry, one per camera, each with a
+`run.bat`, the result and the plots. The clips themselves (~70 MB each) are not
+part of the repository: download `o4pro_13-17s.MP4` and `o4lite_53-58s.MP4` from
+the Releases page and put them into the matching folders; `run.bat` without a
+clip says the same.
 
-- `examples/o4pro_13-17s/` — O4 Pro, штатная линза: покадровое дрожание крена
-  (0.1105 → 0.0187 °/кадр при пороге картинки 0.0075).
-- `examples/o4lite_53-58s/` — O4 Lite с линзой Flywoo O4 Wide (запуск с
-  `--lens flywoo`): одиночные выбросы рыскания телеметрии на 55.72 и 55.82 с
-  (1.76 и 0.68° за кадр), из‑за которых Gyroflow дёргал кадр.
+- `examples/o4pro_13-17s/` — O4 Pro, stock lens: frame‑to‑frame roll jitter
+  (0.1105 → 0.0187 °/frame against an image floor of 0.0075).
+- `examples/o4lite_53-58s/` — O4 Lite with the Flywoo O4 Wide lens (run with
+  `--lens flywoo`): single‑frame yaw spikes in the telemetry at 55.72 and
+  55.82 s (1.76 and 0.68° in one frame) that made Gyroflow yank the frame.
 
-В каждой папке `README.md` с числами до/после и с тем, что осталось неидеальным.
+Each folder has a `README.md` with the before/after numbers and with what is
+still not perfect.
 
-## Ограничения, честно
+## Limitations, honestly
 
-- Тангаж и рыскание картинка измеряет с заниженным масштабом (0.5–0.75 на
-  Lite, 0.7–0.95 на Pro): перемещение дрона над землёй неотделимо от поворота
-  при малой базе. Поэтому ремонт событий опирается на *изменение* расхождения
-  за доли секунды, а не на его величину, итог за окно обнуляется, и применяются
-  только события, подтверждённые вторым каналом. Крен этой проблемы не имеет
-  (усиление ~1.0 на обеих камерах).
-- Модель объектива по умолчанию берётся из телеметрии клипа. Если на камере
-  стоит другая линза (на тестовом Lite стояла Flywoo O4 Wide), передайте тот же
-  профиль, что выбран в Gyroflow: `--lens flywoo` (часть имени файла в
-  `lens_profiles/`, где лежит профиль Flywoo O4 Wide) или `--lens путь/к/профилю.json`
-  из базы github.com/gyroflow/lens_profiles. Крен и вырезание выбросов от линзы не
-  зависят; согласие тангажа/рыскания с телеметрией с правильным профилем на Lite
-  улучшилось (остаток 0.73° → 0.56°/кадр), но заниженный масштаб остался и
-  на Lite, и на Pro со стоковой линзой: это параллакс, а не линза. Поэтому
-  `--fit-focal` (подбор масштаба фокуса по телеметрии на быстрых кадрах) только
-  диагностический и применяется, лишь если усиления доходят до 1; на обоих
-  тестовых клипах он корректно отказывается.
-- Быстрее ~60 °/с картинка размыта; там ничего не исправляется.
-- Крен ниже 4 Гц оставлен телеметрии: интеграл измерения по картинке дрейфует.
+- The image measures pitch and yaw at an understated scale (0.5–0.75 on the
+  Lite, 0.7–0.95 on the Pro): with a short baseline, the drone's translation over
+  the ground is inseparable from rotation. The event repair therefore relies on
+  the *change* of the disagreement over fractions of a second rather than on its
+  magnitude, the total over the window is zeroed, and only events confirmed by a
+  second channel are applied. Roll does not have this problem (gain ~1.0 on both
+  cameras).
+- The lens model is taken from the clip's telemetry by default. If the camera
+  carries a different lens (the test Lite had a Flywoo O4 Wide), pass the same
+  profile that is selected in Gyroflow: `--lens flywoo` (part of a file name in
+  `lens_profiles/`, where the Flywoo O4 Wide profile lives) or
+  `--lens path/to/profile.json` from the github.com/gyroflow/lens_profiles
+  database. Roll and spike removal do not depend on the lens; the pitch/yaw
+  agreement with the telemetry on the Lite improved with the correct profile
+  (residual 0.73° → 0.56°/frame), but the understated scale remained both on the
+  Lite and on the Pro with its stock lens: this is parallax, not the lens. That
+  is why `--fit-focal` (fitting the focal scale against the telemetry on the fast
+  frames) is diagnostic only and is applied only if the gains reach 1; on both
+  test clips it correctly refuses.
+- Faster than ~60 °/s the image is blurred; nothing is corrected there.
+- Roll below 4 Hz is left to the telemetry: the integral of the image
+  measurement drifts.
 
-## Проверка и сравнение файлов
+## Verifying and comparing files
 
 ```bash
 python src/verify_fix.py <video> --image <clip_image.npz> <sidecar1.mp4> [<sidecar2.mp4> ...]
 ```
 
-Для каждого файла: сдвиг тайминга относительно `pts`, при котором крен телеметрии
-лучше всего совпадает с картинкой (у исправленного файла должен быть 0 ± 2 мс),
-дрожание крена по полосам скорости против порога картинки, и расхождение
-тангажа/рыскания по проверенным окнам.
+For each file: the timing shift relative to `pts` at which the telemetry's roll
+best matches the image (for a fixed file it should be 0 ± 2 ms), the roll jitter
+by speed band against the image floor, and the pitch/yaw disagreement over the
+verified windows.
 
-Экспорт Gyroflow без рендера (пути абсолютные, в цикле не запускать):
+A Gyroflow export without a render (absolute paths, do not run it in a loop):
 
 ```bash
 Gyroflow.exe video.MP4 -g sidecar.mp4 --export-metadata "3:C:\abs\camera.json" -f
 ```
 
-Примечание из исходников Gyroflow 1.6.3 (`external/gyroflow`): с `-g` CLI не
-разбирает собственную телеметрию видео, поэтому `frame_readout_time` в проекте
-остаётся 0 и экспорт type 3 отмечен ровно `pts`; в GUI значение readout из
-видео сохраняется, если видео загружено первым. Экспорт type 3 при readout > 0
-ставит метку `pts + readout/2`, а рендер берёт среднюю строку в `pts`.
+A note from the Gyroflow 1.6.3 sources (`external/gyroflow`): with `-g` the CLI
+does not parse the video's own telemetry, so `frame_readout_time` in the project
+stays 0 and a type 3 export is stamped exactly at `pts`; in the GUI the readout
+value from the video is kept if the video is loaded first. A type 3 export with
+readout > 0 stamps `pts + readout/2`, while the render takes the middle row at
+`pts`.
 
-## Файлы
+## Files
 
-| файл | что |
+| file | what |
 |---|---|
-| `src/main.py`, `fix_telemetry.bat` | точка входа |
-| `src/measure_rotation.py` | один проход по видео: крен и сдвиги из аффинного потока (сырые и в нормализованных координатах), чистое вращение по парам кадров, гомография и чистое вращение по окнам в 5 кадров |
-| `src/fix_pipeline.py` | сборка исправленной телеметрии и контрольного файла, отчёт |
-| `src/timing.py` | покадровый тайминг |
-| `src/verify_fix.py` | суд по картинке |
-| `src/dji_o4.py` | CLI: `extract`, `dump`, `sidecar`, `gcsv`, `patch`, `verify`; разбор `djmd` |
-| `src/sidecar.py`, `src/mp4parse.py`, `src/pb.py`, `src/quat.py` | sidecar MP4, ISO‑BMFF, protobuf, кватернионы |
-| `src/telemetry.py` | загрузка `.npz`, векторные операции, запись sidecar |
-| `src/rotmath.py` | кватернионная математика, общая для всего |
-| `src/align.py`, `src/rollfix.py`, `src/denoise.py` | прежние методы; `denoise.py` даёт винеровские кривые конвейеру, `align.py` — режим `--timing dbgi` |
-| `src/imagerot.py` | измерения по картинке: LK‑трекинг, Кабш, аффинный поток, гомография |
-| `research/` | исследовательские скрипты и сессионный конвейер (история), см. `docs/PROJECT_STRUCTURE.md` |
-| `external/` | исходники Gyroflow и telemetry-parser для сверки (не в репозитории, см. `external/README.md`) |
+| `src/main.py`, `fix_telemetry.bat` | entry point |
+| `src/measure_rotation.py` | one pass over the video: roll and shifts from the affine flow (raw and in normalized coordinates), pure rotation from frame pairs, homography and pure rotation over windows of 5 frames |
+| `src/fix_pipeline.py` | assembling the fixed telemetry and the control file, the report |
+| `src/timing.py` | per‑frame timing |
+| `src/verify_fix.py` | the image's verdict |
+| `src/dji_o4.py` | CLI: `extract`, `dump`, `sidecar`, `gcsv`, `patch`, `verify`; parsing `djmd` |
+| `src/sidecar.py`, `src/mp4parse.py`, `src/pb.py`, `src/quat.py` | sidecar MP4, ISO‑BMFF, protobuf, quaternions |
+| `src/telemetry.py` | loading `.npz`, vector operations, writing a sidecar |
+| `src/rotmath.py` | quaternion maths, shared by everything |
+| `src/align.py`, `src/rollfix.py`, `src/denoise.py` | the earlier methods; `denoise.py` supplies the Wiener curves to the pipeline, `align.py` the `--timing dbgi` mode |
+| `src/imagerot.py` | measurements from the image: LK tracking, Kabsch, affine flow, homography |
+| `research/` | research scripts and the session pipeline (history), see `docs/PROJECT_STRUCTURE.md` |
+| `external/` | Gyroflow and telemetry-parser sources for cross‑checking (not in the repository, see `external/README.md`) |
 
-## Сравнение телеметрии до и после стабилизации (сессионный конвейер)
+## Comparing telemetry before and after stabilization (the session pipeline)
 
-Скрипты лежат в `research/session/`. `compare_stabilization_telemetry.py` сопоставляет DJI-телеметрию исходника с
-движением картинки исходного и стабилизированного видео. Пути к двум видео и
-параметры интервала находятся в начале файла. Каждый запуск создаёт отдельную
-папку `artifacts/sessions/YYYYMMDD_HHMMSS` с тремя одинаково устроенными CSV,
-двумя графиками, описанием сессии и JSON со списком подозрительных интервалов.
+The scripts live in `research/session/`. `compare_stabilization_telemetry.py`
+matches the source's DJI telemetry against the image motion of the source and of
+the stabilized video. The paths to the two videos and the interval parameters are
+at the top of the file. Every run creates its own
+`artifacts/sessions/YYYYMMDD_HHMMSS` folder with three identically laid out CSVs,
+two plots, a description of the session and a JSON listing the suspicious
+intervals.
 
 ```bash
 python research/session/compare_stabilization_telemetry.py
@@ -271,56 +260,55 @@ python research/session/create_telemetry_bugfix.py artifacts/sessions/YYYYMMDD_H
 python research/session/evaluate_telemetry_fix.py
 ```
 
-Этот конвейер требует стабилизированного рендера и остаётся инструментом анализа.
-Исправления 2026‑09‑14: сетка времени скоростей сдвинута на `readout/2`
-(раньше вставляемая деталь попадала не в фазу), правки всех моделей ограничены
-`max_correction_deg`, в оценку добавлена метрика абсолютного отклонения за окно.
-Класс `large_impulse` (всплеск в выходе при согласии гиро и картинки) не является
-доказательством ошибки телеметрии; обоснованный критерий — `gyro_fault`.
+This pipeline needs a stabilized render and remains an analysis tool. Fixes of
+2026‑09‑14: the time grid of the rates was shifted by `readout/2` (the inserted
+detail used to land out of phase), the corrections of all models are bounded by
+`max_correction_deg`, and a metric of the absolute deviation over a window was
+added to the evaluation. The `large_impulse` class (a burst in the output while
+the gyro and the image agree) is not proof of a telemetry error; the justified
+criterion is `gyro_fault`.
 
-## Обрезка видео с сохранением телеметрии
+## Trimming video while keeping the telemetry
 
-В `src/trim_video.py` сверху задайте три параметра и запустите `python src/trim_video.py`:
+Set three parameters at the top of `src/trim_video.py` and run
+`python src/trim_video.py`:
 
 ```python
 FILE = r"F:\36\DJI_20260905181949_0005_D.MP4"
-START = "00:10"  # None — с начала
-END = "00:15"    # None — до конца
+START = "00:10"  # None — from the beginning
+END = "00:15"    # None — to the end
 ```
 
-Границы расширяются до ключевых кадров, все дорожки (`djmd`, `dbgi`) режутся по
-одним номерам кадров, абсолютные метки DJI сохраняются, файл перечитывается и
-проверяется. Обрезанный ролик можно прогнать через `main.py` как обычный.
-Подробнее в `docs/`. Тесты: `python -m unittest discover -s tests`.
+The boundaries are widened to keyframes, all tracks (`djmd`, `dbgi`) are cut at
+the same frame numbers, DJI's absolute timestamps are preserved, and the file is
+read back and checked. A trimmed clip can be put through `main.py` as usual. More
+in `docs/`. Tests: `python -m unittest discover -s tests`.
 
-## Что в файле
+## What is in the file
 
-`djmd` — protobuf `dvtm_O4P.proto`/`dvtm_O4.proto`: 40 кватернионов на кадр
-(2000 Гц номинально, слияние обновляется на 1000 Гц, каждое значение дважды),
-время считывания сенсора (Pro 13.58 мс, Lite 18.13 мс), фокус и дисторсия
-(fisheye OpenCV), экспозиция и ISO по кадрам. Сырых данных гироскопа DJI не
-пишет. Преобразование в систему Gyroflow: `q_cam = (0,0,1,0) ⊗ q ⊗ (0.5,-0.5,-0.5,0.5)`
-плюс знак непрерывности; шкала времени воспроизведена по telemetry-parser
-точно (все метки совпадают с собственным разбором Gyroflow). Подробная карта
-полей и история исследований — в `docs/HANDOFF.md`.
+`djmd` is protobuf `dvtm_O4P.proto`/`dvtm_O4.proto`: 40 quaternions per frame
+(2000 Hz nominally, the fusion updates at 1000 Hz, every value twice), the sensor
+readout time (Pro 13.58 ms, Lite 18.13 ms), focal length and distortion (OpenCV
+fisheye), exposure and ISO per frame. DJI does not write raw gyro data. The
+conversion to Gyroflow's frame is
+`q_cam = (0,0,1,0) ⊗ q ⊗ (0.5,-0.5,-0.5,0.5)` plus a continuity sign; the time
+scale reproduces telemetry-parser exactly (all timestamps match Gyroflow's own
+parsing). A detailed field map and the research history are in
+[`docs/HANDOFF.md`](docs/HANDOFF.md).
 
-## Клипы и обратная связь / Sample clips wanted
+## Sample clips wanted
 
-Инструмент отлажен на двух блоках 2025 года. Если у вас O4 Pro выпуска 2026
-(серийный номер `9F2KP2…` и позже, гироскоп I469D) и стабилизация дёргается,
-пришлите короткий кусок исходника с телеметрией: 5–10 с оригинального MP4 без
-перекодирования, лучше с описанием, где именно дёргает. Так же интересны клипы,
-на которых инструмент не помог.
-
-*The tool was developed on two 2025 units. If you have a 2026 O4 Pro (serial
+The tool was developed on two 2025 units. If you have a 2026 O4 Pro (serial
 `9F2KP2…` or later, I469D gyro) with juddering stabilization, send a short piece
 of the original MP4 with its telemetry: 5–10 s, not re‑encoded, ideally with a
-note of where it judders. Clips where the tool does not help are just as useful.*
+note of where it judders. Clips where the tool does not help are just as useful.
 
-Куда: закреплённый issue «Clips wanted» в [Issues](https://github.com/parhipov/DJIFix/issues),
-файл на любой файлообменник, в issue ссылку. Личный контакт есть на профиле GitHub.
-*Where: the pinned «Clips wanted» issue; upload the file anywhere and post the link.*
+Where: the pinned "Clips wanted" issue in
+[Issues](https://github.com/parhipov/DJIFix/issues); upload the file anywhere you
+like and post the link in the issue. Personal contact details are on the GitHub
+profile.
 
-## Лицензия
+## License
 
-MIT, см. `LICENSE`. Исходники Gyroflow и telemetry-parser в `external/` не входят в репозиторий и распространяются под своими лицензиями.
+MIT, see `LICENSE`. The Gyroflow and telemetry-parser sources in `external/` are
+not part of the repository and are distributed under their own licenses.

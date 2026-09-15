@@ -1,33 +1,37 @@
-# Пример 2: DJI O4 Lite с линзой Flywoo O4 Wide, рывок влево‑вправо
+# Example 2: DJI O4 Lite with the Flywoo O4 Wide lens, a left‑right yank
 
-`o4lite_53-58s.MP4` — 5.4 с (52.8–58.2 с) из `54-56-DJI_20260517170526_0020_D.MP4`,
-3840×2880, 50 fps, HEVC 10‑bit, вырезано без перекодирования вместе с
-телеметрией. На этом участке стабилизированное Gyroflow видео резко дёргается
-по горизонтали около 55.7 с (в куске это 2.9 с), хотя сам полёт плавный.
+**English** | [Русский](README.ru.md)
 
-## Запуск
+`o4lite_53-58s.MP4` — 5.4 s (52.8–58.2 s) out of
+`54-56-DJI_20260517170526_0020_D.MP4`, 3840×2880, 50 fps, HEVC 10‑bit, cut
+without re‑encoding together with its telemetry. On this section the
+Gyroflow‑stabilized video jerks sharply sideways at about 55.7 s (2.9 s into the
+piece) even though the flight itself is smooth.
 
-Клип `o4lite_53-58s.MP4` (68 МБ) лежит не в репозитории, а на странице Releases;
-скачайте его в эту папку, затем
+## Running it
+
+The clip `o4lite_53-58s.MP4` (68 MB) is not in the repository but on the Releases
+page; download it into this folder, then
 
 ```bat
 run.bat
 ```
 
-то есть `fix_telemetry.bat o4lite_53-58s.MP4 --lens flywoo --plots`. Профиль
-линзы обязателен для этой камеры: телеметрия описывает штатную линзу, а стоит
-Flywoo O4 Wide (профиль лежит в `lens_profiles/`, тот же, что выбирают в
-Gyroflow). Первый прогон измеряет картинку (~1.5 мин), потом собирает
-`o4lite_53-58s_telemetry_fixed.mp4`; загрузить в Gyroflow как данные движения.
+that is, `fix_telemetry.bat o4lite_53-58s.MP4 --lens flywoo --plots`. The lens
+profile is mandatory for this camera: the telemetry describes the stock lens
+while a Flywoo O4 Wide is fitted (the profile is in `lens_profiles/`, the same
+one you would pick in Gyroflow). The first run measures the image (~1.5 min),
+then assembles `o4lite_53-58s_telemetry_fixed.mp4`; load it into Gyroflow as
+motion data.
 
-## Что было не так и что сделано
+## What was wrong and what was done
 
-**Одиночные выбросы рыскания в телеметрии.** В двух кадрах слитая ориентация
-DJI сообщает поворот, которого камера не делала. Картинка (измерение по видео)
-это подтверждает. Значения в градусах за кадр, время указано в полном клипе
-(в куске минус 52.8 с):
+**Single‑frame yaw spikes in the telemetry.** In two frames DJI's fused attitude
+reports a rotation the camera never made. The image (measured from the video)
+confirms this. Values in degrees per frame; the times are those of the full clip
+(subtract 52.8 s for the piece):
 
-| время | телеметрия | картинка | исправлено |
+| time | telemetry | image | fixed |
 |---|---|---|---|
 | 55.70 | +0.05 | +0.31 | +0.17 |
 | **55.72** | **+1.76** | +0.24 | +0.03 |
@@ -36,43 +40,48 @@ DJI сообщает поворот, которого камера не дела
 | **55.82** | **+0.68** | +0.17 | 0.00 |
 | 55.84 | +0.03 | +0.19 | +0.08 |
 
-Скачок +1.76° за один кадр это 88 °/с, которых не было; Gyroflow честно
-поворачивал кадр на эти градусы, отсюда рывок. Выбросы найдены по самой
-телеметрии (отклонение от локальной медианы), подтверждены картинкой и
-возвращены на медиану до всех фильтров. Соседние кадры не затронуты.
+A jump of +1.76° in one frame is 88 °/s that never happened; Gyroflow honestly
+rotated the frame by those degrees, hence the yank. The spikes were found from
+the telemetry itself (deviation from the local median), confirmed against the
+image and returned to the median before all the filters. The neighbouring frames
+are untouched.
 
-**Событие 55.28–56.08 с.** Вокруг выбросов телеметрия расходится с картинкой и
-по форме (тангаж в телеметрии 0.9°/кадр против 0.2–0.4 по картинке за
-55.5–55.7 с). Внутри окна форма тангажа/рыскания заменена покадровой формой
-по картинке с нулевым итогом за окно; применено до 2.1°.
+**The 55.28–56.08 s event.** Around the spikes the telemetry disagrees with the
+image in shape too (pitch of 0.9°/frame in the telemetry against 0.2–0.4 from the
+image over 55.5–55.7 s). Inside the window the pitch/yaw shape was replaced by
+the per‑frame shape from the image with a zero total over the window; up to 2.1°
+was applied.
 
-**Крен.** Штатное шумоподавление крена по картинке; на Lite крен изначально
-почти чистый: дрожание 0.038 → 0.034 °/кадр при пороге картинки 0.034.
+**Roll.** The standard roll denoising against the image; on the Lite the roll is
+nearly clean to begin with: jitter 0.038 → 0.034 °/frame against an image floor
+of 0.034.
 
-Проверка по картинке для всего куска: расхождение тангажа/рыскания
-(99‑й процентиль) 0.61 → 0.46 °/кадр; Gyroflow CLI читает файл ровно так, как
-записан (расхождение 0.001°).
+The image's verdict for the whole piece: the pitch/yaw disagreement (99th
+percentile) went 0.61 → 0.46 °/frame; the Gyroflow CLI reads the file exactly as
+it was written (discrepancy 0.001°).
 
-## Что не идеально
+## What is not perfect
 
-- Событие 55.28–56.08 с правится «по форме»: величину поворота картинка на
-  этой камере занижает (параллакс, дрон низко над землёй), поэтому итог за окно
-  принудительно нулевой, а замена телеметрии картинкой внутри окна частичная.
-  Сами выбросы этого ограничения не имеют.
-- На полном клипе вырезается 11 выбросов (19.76, 25.78, 25.98, 26.10,
-  37.24–37.34, 41.14, 55.72, 55.82, 91.54 с); в кусок попали два из них.
-- На коротком куске калибровки (константа тайминга, винеровские кривые,
-  канал‑свидетель для событий) берут значения по умолчанию, в отчёте это видно
-  как `corr nan` и `shift check: n/a`. На полном клипе они измеряются.
+- The 55.28–56.08 s event is corrected "by shape": on this camera the image
+  understates the magnitude of the rotation (parallax, the drone is low over the
+  ground), so the total over the window is forced to zero and the replacement of
+  the telemetry by the image inside the window is partial. The spikes themselves
+  do not have this limitation.
+- On the full clip 11 spikes are cut out (19.76, 25.78, 25.98, 26.10,
+  37.24–37.34, 41.14, 55.72, 55.82, 91.54 s); two of them fall into this piece.
+- On a short piece the calibrations (the timing constant, the Wiener curves, the
+  witness channel for events) fall back to their defaults, which shows in the
+  report as `corr nan` and `shift check: n/a`. On the full clip they are
+  measured.
 
-## Файлы
+## Files
 
-| файл | что |
+| file | what |
 |---|---|
-| `o4lite_53-58s.MP4` | исходный кусок (из Releases) |
-| `run.bat` | запуск с профилем линзы |
-| `o4lite_53-58s_telemetry_fixed.mp4` | результат: исправленная телеметрия для Gyroflow |
-| `o4lite_53-58s_00_control.mp4` | тот же тайминг без правок содержимого, для A/B |
-| `o4lite_53-58s_fix_report.json` | что и на сколько исправлено, выбросы и событие с вердиктом |
-| `o4lite_53-58s_overview.png` | три панели угловых скоростей: телеметрия, картинка, исправлено; события залиты красным, выбросы — фиолетовые линии |
-| `o4lite_53-58s_roll.png`, `_pitch_yaw.png`, `_correction.png` | графики: телеметрия, картинка, исправлено; применённая поправка |
+| `o4lite_53-58s.MP4` | the source piece (from Releases) |
+| `run.bat` | the run, with the lens profile |
+| `o4lite_53-58s_telemetry_fixed.mp4` | the result: fixed telemetry for Gyroflow |
+| `o4lite_53-58s_00_control.mp4` | the same timing with the contents unchanged, for an A/B |
+| `o4lite_53-58s_fix_report.json` | what was corrected and by how much, the spikes and the event with its verdict |
+| `o4lite_53-58s_overview.png` | three panels of angular rates: telemetry, image, fixed; events shaded red, spikes marked by purple lines |
+| `o4lite_53-58s_roll.png`, `_pitch_yaw.png`, `_correction.png` | plots: telemetry, image, fixed; the applied correction |
