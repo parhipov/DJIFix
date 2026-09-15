@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+artifacts/
+external/*
+!external/README.md
+*.log
+*.tmp
+examples/*/*_image.npz
+examples/*/*_fix_diagnostics.npz
+examples/*/*_verify.json
+# sample clips (~70 MB each) are attached to the GitHub release, not tracked
+examples/*/*.MP4

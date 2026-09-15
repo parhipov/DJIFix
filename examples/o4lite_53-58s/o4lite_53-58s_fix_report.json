@@ -1,0 +1,196 @@
+{
+  "video": "o4lite_53-58s.MP4",
+  "image_npz": "o4lite_53-58s_image.npz",
+  "output": "o4lite_53-58s_telemetry_fixed.mp4",
+  "control": "o4lite_53-58s_00_control.mp4",
+  "product": {
+    "proto_file_name": "dvtm_O4.proto",
+    "library_proto_version": "02.01.01",
+    "product_proto_version": "02.00.06",
+    "product_sn": "9BTKN7W00102ES",
+    "product_firmware_version": "01.00.03.00",
+    "clip_timestamp": 14732366,
+    "product_name": "DJI O4"
+  },
+  "fps": 50.0,
+  "frames": 270,
+  "samples": 10799,
+  "readout_ms": 18.127886663927843,
+  "timing": {
+    "mode": "image",
+    "bias_ms": 0.0,
+    "measured_shift_ms": 0.0,
+    "constant_used_ms": 0.0,
+    "minimum_determined": false,
+    "rms_at_best": NaN,
+    "rms_at_zero": NaN,
+    "frames_used": 124,
+    "median_exposure_ms": 5.555555555555555,
+    "exposure_model_shift_ms": 6.286165554186144,
+    "shift_ms_mean": -0.11944490792920845,
+    "shift_ms_min": -0.8718572587185727,
+    "shift_ms_max": 0.2777777777777777
+  },
+  "roll": {
+    "axis": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "axis_mode": "z",
+    "image_source": "kabsch1",
+    "image_gain": 1.0,
+    "fit_corr": NaN,
+    "fit_frames": 182,
+    "free_fit": {
+      "axis": [
+        0.05411823979234483,
+        -0.26199650468405683,
+        0.9635502309973857
+      ],
+      "gain": 1.0587927512029915,
+      "corr": NaN,
+      "frames": 182,
+      "angle_to_z_deg": 15.517190305041952
+    },
+    "frames_with_image": 269,
+    "r0_deg_s": 40.0,
+    "band_hz": [
+      4.0,
+      24.8
+    ],
+    "discrepancy_rms_deg_per_frame": 0.14404215205569285,
+    "correction_rms_deg": 0.013343020093005975,
+    "correction_peak_deg": 0.06533341866204583
+  },
+  "pitch_yaw": {
+    "r0_deg_s": 80.0,
+    "hp_hz": 1.0,
+    "floor_hz": 4.0,
+    "axes": [
+      {
+        "channel": "kabsch1[0]",
+        "used": true,
+        "axis": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "image_gain": 1.0,
+        "fit_corr": NaN,
+        "fit_frames": 182,
+        "keep": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          0.77,
+          0.72,
+          0.67,
+          0.64,
+          0.61,
+          0.48,
+          0.35,
+          0.25,
+          0.19,
+          0.19
+        ],
+        "calibrated": false
+      },
+      {
+        "channel": "kabsch1[1]",
+        "used": true,
+        "axis": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "image_gain": 1.0,
+        "fit_corr": NaN,
+        "fit_frames": 182,
+        "keep": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          0.77,
+          0.72,
+          0.67,
+          0.64,
+          0.61,
+          0.48,
+          0.35,
+          0.25,
+          0.19,
+          0.19
+        ],
+        "calibrated": false
+      }
+    ],
+    "correction_rms_deg": 0.024894391798855546,
+    "correction_peak_deg": 0.1686211930682498
+  },
+  "spikes": {
+    "count": 2,
+    "times_s": [
+      2.92,
+      3.02
+    ],
+    "threshold_deg_per_frame": 0.35,
+    "peak_deg": 1.7131817020177613
+  },
+  "events": {
+    "count": 1,
+    "list": [
+      {
+        "start_s": 2.44,
+        "end_s": 3.12,
+        "frames": [
+          122,
+          156
+        ],
+        "peak_deg_per_frame": 0.5772943724132071,
+        "mean_rate_deg_s": 33.35122204882765,
+        "weight": 1.0,
+        "telemetry_spike": true,
+        "spike_frames_s": [
+          2.92,
+          3.02
+        ],
+        "free_net": true,
+        "shift_check": null,
+        "applied_peak_deg": 2.1427040280112903
+      }
+    ],
+    "threshold_deg_per_frame": 0.1,
+    "max_deg": 0.0,
+    "event_gain": 1.0,
+    "unclear_weight": 0.0,
+    "estimator": "max",
+    "model": "image",
+    "zero_net": true,
+    "correction_peak_deg": 2.1427040280112903,
+    "windows_total": 150,
+    "windows_reliable": 39,
+    "axis_map": {
+      "perm": [
+        0,
+        1,
+        2
+      ],
+      "signs": [
+        -1,
+        1,
+        1
+      ],
+      "fit_err_deg": NaN,
+      "fit_windows": 27
+    }
+  },
+  "total": {
+    "correction_rms_deg": 0.7469714709788378,
+    "correction_peak_deg": 2.9212848019880444,
+    "edited_records": 10799,
+    "bytes": 301647
+  }
+}

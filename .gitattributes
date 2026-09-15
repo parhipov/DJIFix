@@ -1,0 +1,13 @@
+# Normalise line endings in the repository; Windows scripts keep CRLF.
+* text=auto
+*.bat text eol=crlf
+*.py text
+*.md text
+*.json text
+*.txt text
+
+# Binary assets
+*.MP4 binary
+*.mp4 binary
+*.png binary
+*.npz binary
