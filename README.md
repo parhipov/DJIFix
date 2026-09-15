@@ -294,6 +294,22 @@ END = "00:15"    # None — до конца
 точно (все метки совпадают с собственным разбором Gyroflow). Подробная карта
 полей и история исследований — в `docs/HANDOFF.md`.
 
+## Клипы и обратная связь / Sample clips wanted
+
+Инструмент отлажен на двух блоках 2025 года. Если у вас O4 Pro выпуска 2026
+(серийный номер `9F2KP2…` и позже, гироскоп I469D) и стабилизация дёргается,
+пришлите короткий кусок исходника с телеметрией: 5–10 с оригинального MP4 без
+перекодирования, лучше с описанием, где именно дёргает. Так же интересны клипы,
+на которых инструмент не помог.
+
+*The tool was developed on two 2025 units. If you have a 2026 O4 Pro (serial
+`9F2KP2…` or later, I469D gyro) with juddering stabilization, send a short piece
+of the original MP4 with its telemetry: 5–10 s, not re‑encoded, ideally with a
+note of where it judders. Clips where the tool does not help are just as useful.*
+
+Контакт / contact: parhipov@gmail.com или [Issues](https://github.com/parhipov/DJIFix/issues)
+(файл выложите на любой файлообменник и дайте ссылку).
+
 ## Лицензия
 
 MIT, см. `LICENSE`. Исходники Gyroflow и telemetry-parser в `external/` не входят в репозиторий и распространяются под своими лицензиями.
