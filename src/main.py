@@ -25,12 +25,19 @@ What is fixed (see fix_pipeline.py for the details and the numbers):
      telemetry for a sustained stretch and both image estimates agree with each
      other, the telemetry is replaced by the image inside that window.
 
-Steps 2 and 4 need one decoding pass over the video (measure_rotation.py,
-~0.35 s per 4K frame, cached as <name>_image.npz next to the output and resumed
-if interrupted). `--no-image` skips it and falls back to timing + Wiener only.
+Steps 2 and 4 need one decoding pass over the video (measure_rotation.py, about
+0.16 s per 4K frame on a 24-thread CPU, cached as <name>_image.npz next to the
+output and resumed if interrupted). `--no-image` skips it and falls back to
+timing + Wiener only. `--backend gpu` halves the pass but is a slightly different
+measurement -- read the note in measure_rotation.py before mixing the two.
+
+Every run leaves two files next to the video: <name>_telemetry_fixed.mp4 to load
+in Gyroflow, and <name>_overview.png, three panels of angular velocity
+(telemetry, image, fixed) with the repaired events shaded.
 
 Options worth knowing:
-    --plots         also write four PNG plots of telemetry vs image vs fixed
+    --plots         also write the roll, pitch/yaw and correction PNGs
+    --no-plots      write no PNG at all
     --keep          keep the intermediates next to the video (control file for A/B, image cache)
     --artifacts     write into artifacts/main/<name>/ and keep everything (development)
     --lens flywoo   Gyroflow lens profile for the image pass when the camera has another lens:
@@ -240,8 +247,13 @@ def process(video, args):
                 print('  image cache unreadable (%s) -> measuring again' % e)
                 args.remeasure = True
         if not os.path.isfile(image_npz) or args.remeasure:
-            print('  measuring the image (one decoding pass, ~0.35 s per frame) -> %s' % image_npz)
-            measure_rotation.measure(video, image_npz, scale=args.scale, lens=lens)
+            print('  measuring the image (one decoding pass) -> %s' % image_npz)
+            # the clip's own lens model is already parsed: handing it over saves
+            # measure_rotation a second full telemetry parse (~40 s on a 3 min clip)
+            measure_rotation.measure(video, image_npz, scale=args.scale, lens=lens,
+                                     focal_px=float(clip.focal_length),
+                                     distortion=list(clip.distortion_coeffs),
+                                     backend=args.backend, win=args.win)
         else:
             print('  image measurement found: %s' % image_npz)
         print('  building %s' % out)
@@ -267,10 +279,21 @@ def process(video, args):
                   'or set the GYROFLOW environment variable)')
 
     diag_path = os.path.join(outdir, base + '_fix_diagnostics.npz')
-    if args.plots and not args.no_image and os.path.isfile(diag_path):
-        import plot_report
-        for p in plot_report.make_plots(diag_path, image_npz, report_path, outdir, base):
-            print('  plot: %s' % p)
+    # the overview PNG is part of the result, not an intermediate: it stays next
+    # to the fixed file after the cleanup below, so a run can be read without
+    # opening Gyroflow. --plots adds the other three, --no-plots writes none.
+    if not args.no_plots and not args.no_image and os.path.isfile(diag_path):
+        try:
+            import plot_report
+            made = (plot_report.make_plots(diag_path, image_npz, report_path, outdir, base)
+                    if args.plots else
+                    [plot_report.make_overview(diag_path, image_npz, report_path, outdir, base)])
+            for p in made:
+                print('  plot: %s' % p)
+        except ImportError:
+            print('  (no overview plot: matplotlib is not installed -- pip install matplotlib)')
+        except Exception as e:  # noqa: BLE001
+            print('  (no overview plot: %s)' % e)
     if not keep:
         removed = []
         for path in (image_npz, control, diag_path,
@@ -282,11 +305,14 @@ def process(video, args):
                 except OSError:
                     pass
         if removed:
-            print('  removed intermediates: %s  (--keep retains them; the image cache saves the ~25 min next time)'
+            print('  removed intermediates: %s  (--keep retains them; the image cache saves the decoding pass next time)'
                   % ', '.join(removed))
             print('  kept: %s (what was fixed, and every event with its verdict)' % os.path.basename(report_path))
     print('\n  Load in Gyroflow: Motion data -> open file ->')
     print('  %s' % out)
+    overview = os.path.join(outdir, base + '_overview.png')
+    if os.path.isfile(overview):
+        print('  (what the fix did, at a glance: %s)' % os.path.basename(overview))
     if keep:
         print('  (control with the same timing but no content change: %s)' % control)
     return True
@@ -298,7 +324,15 @@ def main():
     ap.add_argument('-o', '--outdir', help='output directory (default: next to the source video)')
     ap.add_argument('--artifacts', action='store_true', help='write into artifacts/main/<name>/ and keep everything')
     ap.add_argument('--keep', action='store_true', help='keep intermediate files (image cache, control, diagnostics)')
-    ap.add_argument('--plots', action='store_true', help='write PNG plots (overview, roll, pitch/yaw, correction) next to the result')
+    ap.add_argument('--backend', choices=('auto', 'gpu', 'cpu'), default='cpu',
+                    help='image pass: cpu (default, the reference numbers), gpu (OpenCL, '
+                         'about twice as fast, but it moves the window estimates enough to '
+                         'change which pitch/yaw events are applied), or auto')
+    ap.add_argument('--win', type=int, default=None,
+                    help='LK window for the image pass, default 31 on the CPU and 21 on the GPU')
+    ap.add_argument('--plots', action='store_true',
+                    help='also write the roll, pitch/yaw and correction PNGs (the overview is always written)')
+    ap.add_argument('--no-plots', action='store_true', help='write no PNG at all, not even the overview')
     ap.add_argument('--no-image', action='store_true', help='skip the video pass: timing + Wiener only')
     ap.add_argument('--remeasure', action='store_true', help='redo the image pass even if cached')
     ap.add_argument('--lens', help='Gyroflow lens profile JSON (the profile you use in Gyroflow) for the image pass')

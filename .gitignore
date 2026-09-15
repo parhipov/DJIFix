@@ -12,3 +12,6 @@ examples/*/*_fix_diagnostics.npz
 examples/*/*_verify.json
 # sample clips (~70 MB each) are attached to the GitHub release, not tracked
 examples/*/*.MP4
+
+# local test clips
+real_videos/

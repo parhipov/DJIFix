@@ -4,7 +4,8 @@ Pictures of what the fix did, from the diagnostics a run leaves behind.
 
     python src/plot_report.py <clip>_fix_diagnostics.npz <clip>_image.npz <clip>_fix_report.json -o <folder>
 
-Writes three PNGs next to the clip (main.py --plots does this for you):
+Writes four PNGs next to the clip. A normal main.py run writes the overview on
+its own; --plots adds the other three:
 
   <clip>_roll.png        per-frame roll: telemetry, image, corrected; whole clip and a calm 3 s zoom
   <clip>_pitch_yaw.png   per-frame pitch/yaw: telemetry vs image vs corrected, events and spikes marked
@@ -161,16 +162,30 @@ def plot_overview(t, inc, img, fixed, d, events, rep, out, title):
     plt.close(fig)
 
 
-def make_plots(diag_path, image_path, report_path, outdir, base):
+ALL_PLOTS = ('roll', 'pitch_yaw', 'correction', 'overview')
+
+
+def make_plots(diag_path, image_path, report_path, outdir, base, which=ALL_PLOTS):
     t, inc, img, fixed, theta, d, events, rep = _load(diag_path, image_path, report_path)
     os.makedirs(outdir, exist_ok=True)
     title = base
+    draw = {
+        'roll': lambda p: plot_roll(t, inc, img, fixed, d, events, p, title),
+        'pitch_yaw': lambda p: plot_pitch_yaw(t, inc, img, fixed, events, p, title),
+        'correction': lambda p: plot_correction(t, theta, d, events, p, title, rep),
+        'overview': lambda p: plot_overview(t, inc, img, fixed, d, events, rep, p, title),
+    }
     paths = []
-    p = os.path.join(outdir, base + '_roll.png'); plot_roll(t, inc, img, fixed, d, events, p, title); paths.append(p)
-    p = os.path.join(outdir, base + '_pitch_yaw.png'); plot_pitch_yaw(t, inc, img, fixed, events, p, title); paths.append(p)
-    p = os.path.join(outdir, base + '_correction.png'); plot_correction(t, theta, d, events, p, title, rep); paths.append(p)
-    p = os.path.join(outdir, base + '_overview.png'); plot_overview(t, inc, img, fixed, d, events, rep, p, title); paths.append(p)
+    for name in which:
+        p = os.path.join(outdir, '%s_%s.png' % (base, name))
+        draw[name](p)
+        paths.append(p)
     return paths
+
+
+def make_overview(diag_path, image_path, report_path, outdir, base):
+    """Only the overview panel: the one picture every run leaves next to the result."""
+    return make_plots(diag_path, image_path, report_path, outdir, base, which=('overview',))[0]
 
 
 if __name__ == '__main__':

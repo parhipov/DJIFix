@@ -6,14 +6,20 @@ rem  Drag one or more DJI .MP4 files onto this file, or run it from a prompt:
 rem      fix_telemetry.bat "F:\36\DJI_20260905181503_0003_D.MP4"
 rem
 rem  It writes NAME_telemetry_fixed.mp4 next to the video -- load that file in
-rem  Gyroflow under Motion data. The video itself is never modified. Everything
+rem  Gyroflow under Motion data -- and NAME_overview.png, three panels of angular
+rem  velocity (telemetry, image, fixed) showing what the run repaired. Use
+rem  --plots for three more pictures, --no-plots for none.
+rem  The video itself is never modified. Everything
 rem  else the run produces (image measurement cache, control telemetry, reports)
-rem  is deleted at the end; add --keep to retain it (the cache saves the ~25 min
+rem  is deleted at the end; add --keep to retain it (the cache saves the whole
 rem  video pass next time, the control file NAME_00_control.mp4 is for A/B).
 rem
 rem  The first run on a clip decodes the whole video once to measure the real
-rem  camera rotation (about 0.35 s per 4K frame, so ~25 minutes for 90 s).
-rem  --no-image skips that step and only fixes the timing plus the de-noising.
+rem  camera rotation: about 0.16 s per 4K frame, so ~8 minutes per minute of 4K60.
+rem  --backend gpu runs the tracking on an OpenCL GPU and halves that, at the cost
+rem  of a slightly different measurement -- do not mix the two on one clip.
+rem  --no-image skips the step entirely and only fixes the timing and the noise.
+rem  An interrupted run is resumed from the cache, so it is safe to stop it.
 rem
 rem  -o "D:\some\dir" writes into a directory of your choice (and keeps everything);
 rem  --artifacts writes into artifacts\main\NAME\ for development.
@@ -23,6 +29,7 @@ rem      fix_telemetry.bat video.MP4 --lens flywoo     (O4 Lite with the Flywoo 
 rem      fix_telemetry.bat video.MP4 --keep
 rem      fix_telemetry.bat video.MP4 --gain 0.7
 rem      fix_telemetry.bat video.MP4 --no-image
+rem      fix_telemetry.bat video.MP4 --backend gpu
 rem      fix_telemetry.bat video.MP4 --gyroflow "D:\Gyroflow\Gyroflow.exe"
 rem      fix_telemetry.bat *.MP4 --no-verify
 rem

@@ -23,12 +23,27 @@ Rotation vectors are in OpenCV camera axes (x right, y down, z forward), in
 degrees, describing the ray motion from the first to the second frame; the signed
 axis map onto the telemetry frame is fitted by the consumer (`best_axis_map`).
 
+The pass decodes the clip in a background thread and tracks on the CPU by
+default (0.16 s per 4K frame on 24 threads, unchanged numbers). `--backend gpu`
+tracks on the GPU through OpenCL at 0.075 s per frame, but it is not the same
+measurement and it is not interchangeable with the CPU one: sub-pixel
+differences in the tracked points leave the per-pair quantities alone (roll
+agrees to ~3 % of its own rms) while the f->f+gap window estimates move by
+~0.2 deg in kabsch_deg and ~1 deg in homog_deg. Measured on one 180 s clip, that
+is enough to change which pitch/yaw events fix_pipeline confirms. The same shift
+appears between a 21 px and a 31 px window on the CPU, so it is the estimator's
+own reproducibility floor rather than anything the GPU does wrong -- but it is a
+reason to keep one backend for a given clip.
+
     python src/measure_rotation.py "F:\\36\\clip.MP4" -o artifacts/main/clip/clip_image.npz
+    python src/measure_rotation.py "F:\\36\\clip.MP4" -o out.npz --backend gpu
 """
 import argparse
 import json
 import os
+import queue
 import sys
+import threading
 import time
 from collections import deque
 
@@ -38,29 +53,201 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from imagerot import Lens, rotation_kabsch, _pick_decomposition  # noqa: E402
 
+
+def rays_from_normalised(n):
+    """(N,2) pinhole-normalised points -> (N,3) unit rays, without undistorting again."""
+    r = np.column_stack([n[:, 0], n[:, 1], np.ones(len(n))])
+    return r / np.linalg.norm(r, axis=1, keepdims=True)
+
+
 AFFINE_KEYS = ('roll_deg', 'div', 'shear', 'shift_x_deg', 'shift_y_deg')
 AFFINE_N_KEYS = ('roll_n_deg', 'div_n', 'shear_n', 'shift_xn_deg', 'shift_yn_deg')
 
+CPU_WIN, GPU_WIN = 31, 21   # OpenCV's OpenCL LK silently falls back to the CPU above 21
+
+
+def gpu_device():
+    """The OpenCL GPU OpenCV would use, or None. OpenCL is what the stock
+    opencv-python wheel ships; it has no CUDA, so cv2.cuda is never an option."""
+    try:
+        if not cv2.ocl.haveOpenCL():
+            return None
+        cv2.ocl.setUseOpenCL(True)
+        if not cv2.ocl.useOpenCL():
+            return None
+        d = cv2.ocl.Device_getDefault()
+        if d is None or not d.name() or d.type() == 2:   # 2 = CL_DEVICE_TYPE_CPU
+            return None
+        return d.name().strip()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class Flow:
+    """Corner detection and LK tracking, on the GPU when OpenCL has one.
+
+    Two things matter for speed and both are here rather than at the call site:
+    every LK call rebuilds the image pyramid, so all the live chains are tracked
+    in one call instead of one call each (identical result, ~1.7x), and on the
+    GPU the images stay in device memory across frames -- only the point lists
+    cross the bus."""
+
+    def __init__(self, gpu, win, levels, mask, max_pts, quality=0.01, min_dist=10,
+                 block=7, fb_err=0.5):
+        self.gpu, self.win, self.levels = gpu, (win, win), levels
+        self.max_pts, self.quality, self.min_dist, self.block = max_pts, quality, min_dist, block
+        self.fb_err = fb_err
+        self.mask = cv2.UMat(mask) if gpu else mask
+        self.crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 40, 0.01)
+
+    def upload(self, grey):
+        return cv2.UMat(grey) if self.gpu else grey
+
+    def corners(self, img):
+        p = cv2.goodFeaturesToTrack(img, self.max_pts, self.quality, self.min_dist,
+                                    mask=self.mask, blockSize=self.block)
+        if p is None:
+            return None
+        if isinstance(p, cv2.UMat):
+            p = p.get()
+        return p.reshape(-1, 2).astype(np.float32)
+
+    def track(self, a, b, pts):
+        """pts (N,2) -> (p1 (N,2), good (N,) bool), forward-backward checked."""
+        p0 = np.ascontiguousarray(pts.reshape(-1, 1, 2), dtype=np.float32)
+        src = cv2.UMat(p0) if self.gpu else p0
+        p1, st, _ = cv2.calcOpticalFlowPyrLK(a, b, src, None, winSize=self.win,
+                                             maxLevel=self.levels, criteria=self.crit)
+        p0b, st2, _ = cv2.calcOpticalFlowPyrLK(b, a, p1, None, winSize=self.win,
+                                               maxLevel=self.levels, criteria=self.crit)
+        if self.gpu:
+            p1, st, p0b, st2 = p1.get(), st.get(), p0b.get(), st2.get()
+        p1 = p1.reshape(-1, 2)
+        good = (st.ravel() == 1) & (st2.ravel() == 1)
+        good &= np.linalg.norm(p0.reshape(-1, 2) - p0b.reshape(-1, 2), axis=1) < self.fb_err
+        return p1, good
+
+
+class GreyReader:
+    """Decoding thread: full frame -> scaled grey, handed over through a queue.
+
+    Decoding one 4K frame costs about as much as everything else in the loop put
+    together and OpenCV drops the GIL while it runs, so it overlaps with the
+    tracking instead of adding to it. Hardware decoding was tried and lost:
+    downloading the 4K surface costs more than the decode it saves."""
+
+    def __init__(self, video, first, scale, prefetch=8):
+        self.video, self.first, self.scale = video, first, scale
+        self.q = queue.Queue(max(1, prefetch))
+        self.stop = threading.Event()
+        self.error = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        cap = None
+        try:
+            cap = cv2.VideoCapture(self.video)
+            if not cap.isOpened():
+                raise RuntimeError('cannot open %s' % self.video)
+            if self.first:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, self.first)
+                if abs(cap.get(cv2.CAP_PROP_POS_FRAMES) - self.first) > .1:
+                    cap.release()
+                    cap = cv2.VideoCapture(self.video)
+                    for _ in range(self.first):
+                        if not cap.grab():
+                            raise RuntimeError('cannot seek to frame %d' % self.first)
+            while not self.stop.is_set():
+                ok, img = cap.read()
+                if not ok:
+                    break
+                small = cv2.resize(img, None, fx=self.scale, fy=self.scale,
+                                   interpolation=cv2.INTER_AREA)
+                grey = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                while not self.stop.is_set():
+                    try:
+                        self.q.put(grey, timeout=0.2)
+                        break
+                    except queue.Full:
+                        continue
+        except Exception as e:  # noqa: BLE001
+            self.error = e
+        finally:
+            if cap is not None:
+                cap.release()
+            try:
+                self.q.put(None, timeout=1.0)
+            except queue.Full:
+                pass
+
+    def read(self):
+        """Next grey frame, or None at the end of the clip."""
+        while True:
+            try:
+                item = self.q.get(timeout=0.5)
+            except queue.Empty:
+                if not self.thread.is_alive() and self.q.empty():
+                    if self.error:
+                        raise self.error
+                    return None
+                continue
+            if item is None and self.error:
+                raise self.error
+            return item
+
+    def close(self):
+        self.stop.set()
+        try:
+            while not self.q.empty():
+                self.q.get_nowait()
+        except Exception:  # noqa: BLE001
+            pass
+        self.thread.join(timeout=2.0)
+
 
 def affine_fit(a, b, cx, cy, f_small):
-    """v = A p + b on tracked points; returns (roll_deg, div, shear, sx_deg, sy_deg)."""
-    p = a - np.array([cx, cy])
-    v = b - a
-    M = np.zeros((2 * len(p), 6))
-    M[0::2, 0] = p[:, 0]; M[0::2, 1] = p[:, 1]; M[0::2, 4] = 1
-    M[1::2, 2] = p[:, 0]; M[1::2, 3] = p[:, 1]; M[1::2, 5] = 1
-    y = v.reshape(-1)
-    wt = np.ones(len(y))
-    sol = None
+    """v = A p + b on tracked points; returns (roll_deg, div, shear, sx_deg, sy_deg).
+
+    The 2N x 6 design matrix of the stacked least-squares problem has no unknown
+    shared between an x row and a y row, so it splits into two 3-parameter
+    systems. Solving those two 3x3 normal equations per reweighting step gives
+    the same numbers as one least-squares solve on the stacked matrix and costs
+    about a tenth as much; the columns are scaled to O(1) first so the normal
+    equations stay as well conditioned as the original SVD.
+    """
+    p = np.asarray(a, dtype=np.float64) - np.array([cx, cy], dtype=np.float64)
+    v = np.asarray(b, dtype=np.float64) - np.asarray(a, dtype=np.float64)
+    s0 = max(float(np.abs(p).max()), 1e-9)
+    X = np.empty((len(p), 3))
+    X[:, 0] = p[:, 0] / s0
+    X[:, 1] = p[:, 1] / s0
+    X[:, 2] = 1.0
+    vx, vy = np.ascontiguousarray(v[:, 0]), np.ascontiguousarray(v[:, 1])
+    wx = np.ones(len(p))
+    wy = np.ones(len(p))
+    c1 = c2 = None
     for _ in range(6):
-        W = wt[:, None]
-        sol, *_ = np.linalg.lstsq(M * W, y * wt, rcond=None)
-        r = np.abs(M @ sol - y)
-        s = max(1.4826 * np.median(r), 1e-9)
-        wt = 1.0 / np.sqrt(1.0 + (r / (2 * s)) ** 2)
-    a11, a12, a21, a22, bx, by = sol
+        c1 = _wls3(X, vx, wx)
+        c2 = _wls3(X, vy, wy)
+        rx = np.abs(X @ c1 - vx)
+        ry = np.abs(X @ c2 - vy)
+        s = max(1.4826 * np.median(np.concatenate((rx, ry))), 1e-9)
+        wx = 1.0 / np.sqrt(1.0 + (rx / (2 * s)) ** 2)
+        wy = 1.0 / np.sqrt(1.0 + (ry / (2 * s)) ** 2)
+    a11, a12, bx = c1[0] / s0, c1[1] / s0, c1[2]
+    a21, a22, by = c2[0] / s0, c2[1] / s0, c2[2]
     return (np.degrees(0.5 * (a21 - a12)), 0.5 * (a11 + a22), 0.5 * (a11 - a22),
             np.degrees(bx / f_small), np.degrees(by / f_small))
+
+
+def _wls3(X, y, w):
+    """Weighted least squares on three unknowns, through the normal equations."""
+    w2 = w * w
+    Xw = X * w2[:, None]
+    A = X.T @ Xw
+    A[np.diag_indices(3)] += 1e-12 * np.trace(A)
+    return np.linalg.solve(A, Xw.T @ y)
 
 
 def solve_window(a, b, lens, focal_px, f_small, prev_n, min_inliers):
@@ -83,9 +270,31 @@ def solve_window(a, b, lens, focal_px, f_small, prev_n, min_inliers):
 
 def measure(video, out_path, scale=0.25, gap=5, max_pts=1500, radius_frac=0.6,
             first=0, count=None, focal_px=None, distortion=None, min_inliers=80,
-            fb_err=0.5, save_every=200, progress=True, lens=None):
+            fb_err=0.5, save_every=200, progress=True, lens=None,
+            backend='cpu', win=None, levels=4, prefetch=8):
     """lens: optional dict(f, cx, cy, D, name) overriding the clip's own lens model,
-    e.g. from lenscal.load_gyroflow_lens (the profile you pick in Gyroflow)."""
+    e.g. from lenscal.load_gyroflow_lens (the profile you pick in Gyroflow).
+
+    backend: 'cpu' (the default, and the reference measurement), 'gpu' for OpenCL,
+    'auto' for the GPU when there is one. Nothing reaches the GPU unless it is
+    asked for by name. win is the LK window; it defaults to 31 on the CPU and
+    21 on the GPU, which is the largest window OpenCV's OpenCL LK accepts before
+    it quietly falls back to the CPU. Backends are not interchangeable within a
+    clip -- see the module docstring."""
+    if backend not in ('auto', 'gpu', 'cpu'):
+        raise ValueError('backend must be auto, gpu or cpu')
+    dev = None if backend == 'cpu' else gpu_device()
+    if backend == 'gpu' and dev is None:
+        raise SystemExit('no OpenCL GPU available for --backend gpu')
+    gpu = dev is not None
+    cv2.ocl.setUseOpenCL(bool(gpu))
+    if win is None:
+        win = GPU_WIN if gpu else CPU_WIN
+    if gpu and win > GPU_WIN:
+        print('  LK window %d is above %d: OpenCV would fall back to the CPU, using the CPU'
+              % (win, GPU_WIN), flush=True)
+        gpu, dev = False, None
+        cv2.ocl.setUseOpenCL(False)
     cap = cv2.VideoCapture(video)
     if not cap.isOpened():
         raise SystemExit('cannot open %s' % video)
@@ -120,22 +329,33 @@ def measure(video, out_path, scale=0.25, gap=5, max_pts=1500, radius_frac=0.6,
                 focal_px=focal_px, distortion=list(map(float, distortion)), width=W0, height=H0,
                 cx=cx0, cy=cy0, lens_source=lens_source,
                 max_pts=max_pts, radius_frac=radius_frac, fb_err=fb_err,
+                win=int(win), levels=int(levels), backend=('gpu' if gpu else 'cpu'),
+                device=(dev or 'cpu'),
                 axes='OpenCV camera: x right, y down, z forward; rotation of rays from frame f to f+gap')
 
     start_at = 0
     if os.path.exists(out_path):
         try:
-            prev_d = np.load(out_path)
-            pm = json.loads(str(prev_d['meta_json']))
-            same = all(pm.get(k) == meta[k] for k in ('video', 'first', 'count', 'gap', 'scale', 'max_pts'))
-            if same:
-                done = int(prev_d['homog_deg'].shape[0])
-                got = np.flatnonzero(np.isfinite(prev_d['roll_deg']))
-                if len(got):
-                    start_at = max(0, int(got[-1]) - 2 * gap)
-                    for k in out:
-                        out[k][:start_at] = prev_d[k][:start_at]
-                    print('resuming at frame %d' % (first + start_at), flush=True)
+            # closed before the first save(): Windows refuses to replace a file
+            # that still has an open handle, and np.load keeps the zip open
+            with np.load(out_path) as prev_d:
+                pm = json.loads(str(prev_d['meta_json']))
+                # a partial file written before the backend switch existed carries
+                # no 'win': it came from the CPU path, which is what CPU_WIN means
+                same = (pm.get('win', CPU_WIN) == meta['win']
+                        # the same clip reached by a differently spelled path is
+                        # still the same clip: drag-and-drop and a typed command
+                        # disagree about the drive letter's case on Windows
+                        and os.path.normcase(pm.get('video', '')) == os.path.normcase(meta['video'])
+                        and all(pm.get(k) == meta[k]
+                                for k in ('first', 'count', 'gap', 'scale', 'max_pts')))
+                if same:
+                    got = np.flatnonzero(np.isfinite(prev_d['roll_deg']))
+                    if len(got):
+                        start_at = max(0, int(got[-1]) - 2 * gap)
+                        for k in out:
+                            out[k][:start_at] = prev_d[k][:start_at]
+                        print('resuming at frame %d' % (first + start_at), flush=True)
         except Exception as e:  # noqa: BLE001
             print('could not resume from %s: %s' % (out_path, e), flush=True)
 
@@ -145,57 +365,63 @@ def measure(video, out_path, scale=0.25, gap=5, max_pts=1500, radius_frac=0.6,
         np.savez_compressed(tmp, meta_json=json.dumps(meta), **out)
         os.replace(tmp, out_path)
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, first + start_at)
-    if abs(cap.get(cv2.CAP_PROP_POS_FRAMES) - (first + start_at)) > .1:
-        cap.release()
-        cap = cv2.VideoCapture(video)
-        for _ in range(first + start_at):
-            if not cap.grab():
-                raise SystemExit('cannot seek')
-    ok, img = cap.read()
-    if not ok:
+    cap.release()
+    reader = GreyReader(video, first + start_at, scale, prefetch=prefetch)
+    prev_grey = reader.read()
+    if prev_grey is None:
+        reader.close()
         raise SystemExit('cannot read frame %d' % (first + start_at))
-    small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    prev = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    h, w = prev.shape
+    h, w = prev_grey.shape
     cx, cy = w / 2.0, h / 2.0
     yy, xx = np.mgrid[0:h, 0:w]
     mask = (((xx - cx) ** 2 + (yy - cy) ** 2) < (radius_frac * min(w, h)) ** 2).astype(np.uint8) * 255
-    crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 40, 0.01)
+    flow = Flow(gpu, win, levels, mask, max_pts, fb_err=fb_err)
+    if progress:
+        print('  %s, LK window %d' % (('GPU (OpenCL): %s' % dev) if gpu else 'CPU', win), flush=True)
 
+    prev = flow.upload(prev_grey)
     chains = deque()   # [start_index, start_pts, cur_pts]
 
-    def seed(grey, index):
-        p = cv2.goodFeaturesToTrack(grey, max_pts, 0.01, 10, mask=mask, blockSize=7)
+    def seed(img, index):
+        p = flow.corners(img)
         if p is not None and len(p) >= 60:
-            p = p.reshape(-1, 2).astype(np.float32)
             chains.append([index, p.copy(), p.copy()])
 
     seed(prev, start_at)
+    # the homography decomposition picks its branch against the previous window's
+    # plane normal, so a resumed run has to start from the normal it left off at;
+    # without this the first few windows after a resume pick the other branch
     prev_n = None
+    if start_at:
+        had = np.flatnonzero(np.isfinite(out['normal'][:start_at]).all(1))
+        if len(had):
+            prev_n = out['normal'][had[-1]]
     t0 = time.time()
     last_save = start_at
     i = start_at
     while True:
         i += 1
-        ok, img = cap.read()
-        if not ok or i > count + gap:
+        grey = reader.read()
+        if grey is None or i > count + gap:
             break
-        small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        cur = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        cur = flow.upload(grey)
+
+        # One LK call for every live chain at once. They all run prev -> cur, and
+        # each call would otherwise rebuild the same two image pyramids.
+        live = [ch for ch in chains if len(ch[2]) >= 60]
         for ch in chains:
-            p0 = ch[2]
-            if len(p0) < 60:
-                ch[2] = p0[:0]
-                continue
-            p1, st, _ = cv2.calcOpticalFlowPyrLK(prev, cur, p0.reshape(-1, 1, 2), None,
-                                                 winSize=(31, 31), maxLevel=4, criteria=crit)
-            p0b, st2, _ = cv2.calcOpticalFlowPyrLK(cur, prev, p1, None,
-                                                   winSize=(31, 31), maxLevel=4, criteria=crit)
-            g = (st.ravel() == 1) & (st2.ravel() == 1)
-            g &= np.linalg.norm(p0 - p0b.reshape(-1, 2), axis=1) < fb_err
-            ch[1] = ch[1][g]
-            ch[2] = p1.reshape(-1, 2)[g]
+            if len(ch[2]) < 60:
+                ch[2] = ch[2][:0]
+        if live:
+            sizes = [len(ch[2]) for ch in live]
+            p1, good = flow.track(prev, cur, np.concatenate([ch[2] for ch in live]))
+            off = 0
+            for ch, n in zip(live, sizes):
+                g = good[off:off + n]
+                ch[1] = ch[1][g]
+                ch[2] = p1[off:off + n][g]
+                off += n
+        for ch in chains:
             if i - ch[0] == 1 and ch[0] < count and len(ch[1]) >= 60:
                 vals = affine_fit(ch[1], ch[2], cx, cy, f_small)
                 for k, v in zip(AFFINE_KEYS, vals):
@@ -210,7 +436,7 @@ def measure(video, out_path, scale=0.25, gap=5, max_pts=1500, radius_frac=0.6,
                 vals_n = affine_fit(na, nb, 0.0, 0.0, 1.0)
                 for k, v in zip(AFFINE_N_KEYS, vals_n):
                     out[k][ch[0]] = v
-                R1, _, _ = rotation_kabsch(lens.to_rays(ch[1]), lens.to_rays(ch[2]))
+                R1, _, _ = rotation_kabsch(rays_from_normalised(na), rays_from_normalised(nb))
                 out['kabsch1_deg'][ch[0]] = np.degrees(cv2.Rodrigues(R1)[0].ravel())
         while chains and i - chains[0][0] >= gap:
             start, a, b = chains.popleft()
@@ -236,7 +462,7 @@ def measure(video, out_path, scale=0.25, gap=5, max_pts=1500, radius_frac=0.6,
                 el = time.time() - t0
                 rate = (i - start_at) / el
                 print('  %d/%d frames, %.2f s/frame, ETA %.0f s' % (i, count, 1 / rate, (count - i) / rate), flush=True)
-    cap.release()
+    reader.close()
     save()
     if progress:
         print('done: %d frames with affine, %d windows with rotation -> %s'
@@ -254,6 +480,11 @@ if __name__ == '__main__':
     ap.add_argument('--count', type=int, default=None)
     ap.add_argument('--max-pts', type=int, default=1500)
     ap.add_argument('--lens', help='Gyroflow lens profile JSON to use instead of the clip metadata model')
+    ap.add_argument('--backend', choices=('auto', 'gpu', 'cpu'), default='cpu',
+                    help='cpu (default, the reference numbers); gpu: OpenCL, ~2x faster, '
+                         'shifts the window estimates; auto: gpu when there is one')
+    ap.add_argument('--win', type=int, default=None, help='LK window, default 31 on the CPU and 21 on the GPU')
+    ap.add_argument('--prefetch', type=int, default=8, help='frames the decoding thread may run ahead')
     a = ap.parse_args()
     lens = None
     if a.lens:
@@ -263,4 +494,5 @@ if __name__ == '__main__':
         w, h = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
         lens = load_gyroflow_lens(a.lens, w, h)
-    measure(a.video, a.out, scale=a.scale, gap=a.gap, first=a.first, count=a.count, max_pts=a.max_pts, lens=lens)
+    measure(a.video, a.out, scale=a.scale, gap=a.gap, first=a.first, count=a.count,
+            max_pts=a.max_pts, lens=lens, backend=a.backend, win=a.win, prefetch=a.prefetch)
