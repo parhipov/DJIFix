@@ -121,6 +121,7 @@ class Clip:
         self.readout_time_ns = None
         self.read_direction = 0
         self.focal_length = None
+        self.eis_enabled = None
         self.imu_sampling_rate = 2000.0
         self.sensor_fps = 59.969295501708984
         self.fps = 59.94
@@ -145,6 +146,7 @@ class Clip:
             'frame_readout_time_ms': self.frame_readout_time_ms,
             'sensor_read_direction': 'TopToBottom' if self.read_direction == 0 else str(self.read_direction),
             'digital_focal_length_px': self.focal_length,
+            'eis_enabled': self.eis_enabled,
             'imu_sampling_rate_hz': self.imu_sampling_rate,
             'sensor_fps': self.sensor_fps,
             'video_stream_meta': self.video,
@@ -169,6 +171,9 @@ def parse_clip(data, clip):
         fl = scalar(field(cm, CLIP_FOCAL_LENGTH), kind='f32')
         if fl is not None:
             clip.focal_length = fl
+        eis = scalar(field(cm, CLIP_EIS))
+        if eis is not None:
+            clip.eis_enabled = bool(eis)
         ir = scalar(field(cm, CLIP_IMU_RATE))
         if ir is not None:
             clip.imu_sampling_rate = float(ir)
@@ -317,6 +322,11 @@ def read_telemetry(path):
                 file_offset=offsets[i], inverted=inv))
 
     f.close()
+    if not samples:
+        detail = 'DJI metadata track contains no fused-attitude quaternion samples'
+        if clip.eis_enabled:
+            detail += ' (the clip metadata reports camera stabilization/EIS enabled)'
+        raise SystemExit(detail)
     return clip, samples, frames
 
 

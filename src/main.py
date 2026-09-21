@@ -191,8 +191,10 @@ def process(video, args):
         clip, samples, frames = dji_o4.read_telemetry(video)
     except SystemExit as e:
         print('!! %s' % e)
-        print('   This file has no DJI telemetry track. A re-encoded or remuxed')
-        print('   copy loses it -- use the original straight off the drone.')
+        print('   This file has no usable DJI motion stream, so it cannot be repaired.')
+        print('   If this is a remuxed copy, try the original straight off the drone.')
+        print('   If it is the original, record future clips with camera')
+        print('   stabilization/EIS disabled so the motion samples are preserved.')
         return False
     hdr = clip.header
     print('  %s  %s fw %s  sn %s' % (hdr.get('product_name', '?'), hdr.get('proto_file_name', '?'),
