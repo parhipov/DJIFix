@@ -98,12 +98,16 @@ still works, the overview picture simply is not drawn).
    frame half the change of exposure relative to the median is added. The old
    alignment against the `dbgi` anchor (`align.py`, +10.5 ms on the Pro) was
    ~10 ms late: on the Lite the same anchor gives a shift of the opposite sign.
-2. **Roll.** DJI's fused attitude trembles in roll by ~0.12°/frame regardless of
-   the real motion. The roll measured from the image (pure rotation of the rays
-   between neighbouring frames, `measure_rotation.py`) replaces it above 4 Hz
-   with a speed‑dependent weight (R0 = 40 °/s), as in `rollfix.py`. The roll axis
-   is z of the telemetry frame (its agreement with the camera axes was confirmed
-   by a windowed homography on the fast sections).
+2. **Roll.** On some units DJI's fused attitude trembles in roll by ~0.1°/frame
+   and wobbles slowly (1–4 Hz) regardless of the real motion. Where this defect
+   is measured — the telemetry‑vs‑image roll error above 4 Hz, judged over the
+   nearest calm seconds — the roll measured from the image (pure rotation of the
+   rays between neighbouring frames, `measure_rotation.py`) replaces it: above
+   4 Hz, and at 1–4 Hz on calm frames away from manoeuvres; never on blurred
+   frames (>60 °/s) or where the image is not self‑consistent
+   (`fix_pipeline.roll_adaptive`). A clip without the defect keeps its roll
+   exactly as it was (checked on 17 clips: only the defective one is touched).
+   The roll axis is z of the telemetry frame.
 3. **Pitch/yaw noise.** A Wiener gain curve above 4 Hz, calibrated on the clip
    where possible; below 4 Hz nothing is touched.
 4. **Spikes and pitch/yaw events.** The Lite's main defect turned out to be
@@ -198,8 +202,9 @@ still not perfect.
   frames) is diagnostic only and is applied only if the gains reach 1; on both
   test clips it correctly refuses.
 - Faster than ~60 °/s the image is blurred; nothing is corrected there.
-- Roll below 4 Hz is left to the telemetry: the integral of the image
-  measurement drifts.
+- Roll below 1 Hz is left to the telemetry (the integral of the image
+  measurement drifts), and 1–4 Hz is taken from the image only on calm frames:
+  in motion, parallax makes the image roll unreliable there.
 
 ## Verifying and comparing files
 

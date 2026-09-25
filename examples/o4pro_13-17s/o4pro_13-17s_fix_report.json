@@ -1,8 +1,8 @@
 {
-  "video": "o4pro_13-17s.MP4",
-  "image_npz": "o4pro_13-17s_image.npz",
-  "output": "o4pro_13-17s_telemetry_fixed.mp4",
-  "control": "o4pro_13-17s_00_control.mp4",
+  "video": "K:\\Work\\Python\\DJI fix\\examples\\o4pro_13-17s\\o4pro_13-17s.MP4",
+  "image_npz": "K:\\Work\\Python\\DJI fix\\examples\\o4pro_13-17s\\o4pro_13-17s_image.npz",
+  "output": "K:\\Work\\Python\\DJI fix\\examples\\o4pro_13-17s\\o4pro_13-17s_telemetry_fixed.mp4",
+  "control": "K:\\Work\\Python\\DJI fix\\examples\\o4pro_13-17s\\o4pro_13-17s_00_control.mp4",
   "product": {
     "proto_file_name": "dvtm_O4P.proto",
     "library_proto_version": "02.01.01",
@@ -54,14 +54,12 @@
       "angle_to_z_deg": 15.517190305041952
     },
     "frames_with_image": 239,
-    "r0_deg_s": 40.0,
-    "band_hz": [
-      4.0,
-      24.8
-    ],
+    "method": "adaptive (roll_adaptive)",
+    "defect_active_frac": 1.0,
+    "defect_touched_frac": 1.0,
     "discrepancy_rms_deg_per_frame": 0.07219135944137765,
-    "correction_rms_deg": 0.04516772585854619,
-    "correction_peak_deg": 0.19946288578239307
+    "correction_rms_deg": 0.06815444663703914,
+    "correction_peak_deg": 0.30425622477432457
   },
   "pitch_yaw": {
     "r0_deg_s": 80.0,
@@ -165,8 +163,8 @@
     }
   },
   "total": {
-    "correction_rms_deg": 0.037193245944741674,
-    "correction_peak_deg": 0.1995069357569497,
+    "correction_rms_deg": 0.05293837969415095,
+    "correction_peak_deg": 0.3042707787392878,
     "edited_records": 9600,
     "bytes": 267881
   }

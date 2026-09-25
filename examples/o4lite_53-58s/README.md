@@ -52,9 +52,10 @@ image over 55.5–55.7 s). Inside the window the pitch/yaw shape was replaced by
 the per‑frame shape from the image with a zero total over the window; up to 2.1°
 was applied.
 
-**Roll.** The standard roll denoising against the image; on the Lite the roll is
-nearly clean to begin with: jitter 0.038 → 0.034 °/frame against an image floor
-of 0.034.
+**Roll.** Not touched: the roll defect is not measured on this unit (its
+telemetry-vs-image roll error above 4 Hz stays at the level of clean clips), so
+the roll is left exactly as DJI wrote it; jitter 0.038 °/frame against an image
+floor of 0.034.
 
 The image's verdict for the whole piece: the pitch/yaw disagreement (99th
 percentile) went 0.61 → 0.46 °/frame; the Gyroflow CLI reads the file exactly as

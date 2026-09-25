@@ -12,10 +12,12 @@ against the picture rather than assumed:
      telemetry roll read at pts matches the image roll (+0.2 ms on the Pro,
      -1.2 ms on the Lite, i.e. Gyroflow's pts is right and no shift is needed);
      on top, the per-frame exposure variation (timing.py).
-  2. Roll.    DJI's fused roll jitters by ~0.12 deg per frame regardless of what the
-     camera did. The roll measured from the image (curl of the affine flow,
-     parallax-immune) replaces it above 4 Hz where the image is reliable
-     (rate-weighted, R0 = 40 deg/s), exactly as rollfix.py did.
+  2. Roll.    Some units' fused roll jitters by ~0.1 deg per frame and wobbles at
+     1-4 Hz regardless of what the camera did. Only where that defect is measured
+     (telemetry-vs-image roll error above 4 Hz, per second), the roll measured
+     from the image replaces it: above 4 Hz, and at 1-4 Hz on calm frames away
+     from manoeuvres; never where the image is not self-consistent or blurred
+     (roll_adaptive). Clips without the defect keep their roll untouched.
   3. Pitch/yaw noise. The calibrated Wiener keep-gain curve (denoise.py), gentle.
   4. Pitch/yaw events. Where the 5-frame image rotation (homography and pure
      rotation fit, both from measure_rotation.py) disagrees with the telemetry
@@ -192,6 +194,88 @@ def spectral_keep(tel, img, fps, calm, floor_hz=4.0, min_frames=400, nperseg=128
 def shifted_cumsum(c):
     """theta[f] = sum of corrections before f (see rollfix.py on the off-by-one)."""
     return np.concatenate([np.zeros((1,) + c.shape[1:]), np.cumsum(c, axis=0)[:-1]])
+
+
+def _running_rms(x, win):
+    return np.sqrt(np.convolve(x ** 2, np.ones(win) / win, mode='same'))
+
+
+def _band_gain(tel, img, ok, fps, band=(2.0, 4.0), min_run=64, trim=15):
+    """Image/telemetry gain fitted at 2-4 Hz, where the image reads the rotation with gain
+    0.9-1.0 on every clip measured (below it parallax, above it DJI's own jitter)."""
+    runs = [r for r in clusters(ok, gap=0) if len(r) >= min_run]
+    if sum(len(r) - 2 * trim for r in runs) < 300:
+        return 1.0
+    sos = butter(2, list(band), btype='band', fs=fps, output='sos')
+    X = np.concatenate([sosfiltfilt(sos, tel[r[0]:r[-1] + 1])[trim:-trim] for r in runs])
+    Y = np.concatenate([sosfiltfilt(sos, img[r[0]:r[-1] + 1])[trim:-trim] for r in runs])
+    g = float(np.dot(X, Y) / np.dot(X, X))
+    return g if 0.5 < g < 2.0 else 1.0
+
+
+def roll_adaptive(tel_roll, img_roll, curl_roll, npts, rate, valid, fps, r0_hf=120.0, r0_lf=15.0,
+                  lf_band=(1.0, 4.0), fast_deg_s=60.0, fast_pad_s=0.1, calm_ctx_deg_s=30.0, calm_ctx_s=1.0,
+                  kc_deg=0.03, min_pts=300, defect_lo=0.018, defect_hi=0.025, defect_k=7, defect_min=5,
+                  defect_reach_s=20):
+    """Roll correction (deg, per frame) from the image, only where DJI's roll defect is measured.
+
+    Validated 2026-09-25 by Gyroflow renders on 17 clips and by eye on the Pro sample:
+      - above 4 Hz the image roll replaces the telemetry's, weight 1/(1+(rate/120)^2);
+      - 1-4 Hz only on calm frames, weight 1/(1+(rate/15)^2), and only with no frame faster
+        than 30 deg/s within 1 s (the band-pass spreads a correction ~0.5 s both ways and the
+        image lies as blur builds up before a manoeuvre) -- that band carries the slow 2-3 px
+        wobble the earlier >4 Hz-only fix left in;
+      - frames faster than 60 deg/s (+-0.1 s) are not used at all;
+      - frames where the image is not self-consistent (its two roll estimators, pure-rotation
+        fit and affine curl, disagree above 4 Hz by more than `kc_deg`, or fewer than `min_pts`
+        points) get no weight;
+      - defect gate: per calm second the robust telemetry-vs-image roll error above 4 Hz;
+        a second is corrected when the median of its nearest 7 calm seconds within 20 s is
+        above the ramp 0.018-0.025 deg (fewer than 5 such seconds: not corrected). On the 16
+        clips without the defect this leaves the roll exactly as it was; requiring the second's
+        own value as well cost the defect clip its correction wherever the camera moves. The one clip with the defect
+        sits at 0.026-0.041, the 16 without at 0.0065-0.012: without the gate the image's
+        1-4 Hz parallax errors (foliage close to the camera) were pushed into good clips.
+    Returns (theta_roll (N,), gate (N,)).
+    """
+    from scipy.ndimage import binary_dilation
+    n = len(tel_roll)
+    hp = butter(2, 4.0, btype='high', fs=fps, output='sos')
+    has = np.isfinite(img_roll) & valid
+    win = max(5, int(round(0.5 * fps)))
+    curl = np.nan_to_num(curl_roll) if curl_roll is not None else np.nan_to_num(img_roll)
+    kc = _running_rms(np.where(has, sosfiltfilt(hp, np.nan_to_num(img_roll)) - sosfiltfilt(hp, curl), 0.0), win)
+    ok = has & (kc < kc_deg) & (np.nan_to_num(npts, nan=min_pts) >= min_pts)
+    ok &= ~binary_dilation(rate > fast_deg_s, iterations=max(1, int(round(fast_pad_s * fps))))
+    g = _band_gain(np.where(valid, tel_roll, 0.0), np.nan_to_num(img_roll), ok & (rate < 150), fps)
+    disc = np.where(ok, np.nan_to_num(img_roll) / g - tel_roll, 0.0)
+    w_hf = np.where(ok, 1.0 / (1.0 + (rate / r0_hf) ** 2), 0.0)
+    busy = binary_dilation(rate > calm_ctx_deg_s, iterations=max(1, int(round(calm_ctx_s * fps))))
+    w_lf = np.where(ok & ~busy, 1.0 / (1.0 + (rate / r0_lf) ** 2), 0.0)
+    # defect gate
+    herr = np.where(ok, sosfiltfilt(hp, np.nan_to_num(img_roll) / g) - sosfiltfilt(hp, np.where(valid, tel_roll, 0.0)), 0.0)
+    calm = ok & (rate < 45)
+    sec = max(1, int(round(fps)))
+    per_s = np.full(n // sec + 1, np.nan)
+    for i in range(len(per_s)):
+        m = calm[i * sec:(i + 1) * sec]
+        if m.sum() > 0.5 * sec:
+            per_s[i] = 1.4826 * np.median(np.abs(herr[i * sec:(i + 1) * sec][m]))
+    ramp = lambda v: np.clip((v - defect_lo) / (defect_hi - defect_lo), 0.0, 1.0)   # noqa: E731
+    have = np.flatnonzero(np.isfinite(per_s))
+    gate_s = np.zeros(len(per_s))
+    for i in range(len(per_s)):
+        if not len(have):
+            break
+        near = have[np.argsort(np.abs(have - i))[:defect_k]]
+        near = near[np.abs(near - i) <= defect_reach_s]
+        if len(near) >= defect_min:
+            gate_s[i] = ramp(np.median(per_s[near]))
+    gate = np.interp(np.arange(n) / fps, np.arange(len(per_s)) + 0.5, gate_s)
+    hf = butter(2, [lf_band[1], fps / 2 * 0.992], btype='band', fs=fps, output='sos')
+    lf = butter(2, list(lf_band), btype='band', fs=fps, output='sos')
+    theta = sosfiltfilt(hf, shifted_cumsum(gate * w_hf * disc)) + sosfiltfilt(lf, shifted_cumsum(gate * w_lf * disc))
+    return theta, gate
 
 
 def clusters(mask, gap=2):
@@ -610,10 +694,11 @@ def build(video, image_npz, out_path, timing='image', bias_ms=0.0, r0_roll=40.0,
         if (events and fine is not None) else (np.zeros(n_frames, bool), np.zeros_like(inc), np.zeros(n_frames, bool))
     inc_ds = inc + c_spike                                 # de-spiked telemetry increments
     inc_w = np.where(valid[:, None], inc_ds, 0.0)         # junk frames must not enter the filters
-    c_wroll = w_pt * (wiener_axis(np.where(valid, tel_roll, 0.0), hf_only(KEEP, roll_lo_hz), fps) - tel_roll) * gain
-    c_roll = np.where(has_img, c_img, c_wroll)
-    theta_roll = shifted_cumsum(c_roll)
-    theta_roll = sosfiltfilt(band_sos(roll_lo_hz, fps), theta_roll)
+    npts = np.full(n_frames, np.nan)
+    if 'npts' in d:
+        npts[:min(n_frames, len(d['npts']))] = d['npts'][:n_frames]
+    theta_roll, roll_gate = roll_adaptive(inc[:, 2], img_roll, roll_curl, npts, rate, valid, fps)
+    theta_roll = theta_roll * gain
 
     # ---- 3. pitch / yaw Wiener, calibrated on this clip --------------------
     # The image shift channels are angle proxies contaminated by translation, but
@@ -769,7 +854,8 @@ def build(video, image_npz, out_path, timing='image', bias_ms=0.0, r0_roll=40.0,
                   fit_corr=ucorr, fit_frames=un,
                   free_fit=dict(axis=free_uh.tolist(), gain=free_gain, corr=free_corr, frames=free_n,
                                 angle_to_z_deg=float(np.degrees(np.arccos(abs(free_uh[2]))))),
-                  frames_with_image=int(has_img.sum()), r0_deg_s=r0_roll, band_hz=[roll_lo_hz, fps / 2 * 0.992],
+                  frames_with_image=int(has_img.sum()), method='adaptive (roll_adaptive)',
+                  defect_active_frac=float((roll_gate > 0.5).mean()), defect_touched_frac=float((roll_gate > 0).mean()),
                   discrepancy_rms_deg_per_frame=float(np.nanstd(disc[has_img])),
                   correction_rms_deg=float(theta_roll.std()), correction_peak_deg=float(np.abs(theta_roll).max())),
         pitch_yaw=dict(r0_deg_s=r0_pt, hp_hz=hp_hz, floor_hz=roll_lo_hz, axes=pt_info,
@@ -810,8 +896,8 @@ def build(video, image_npz, out_path, timing='image', bias_ms=0.0, r0_roll=40.0,
             np.round(uh, 4), roll_axis, img_source, ugain, ucorr, un, has_img.sum(), n_frames))
         print('               free fit would be %s (gain %.3f, corr %.3f, %.1f deg from z)' % (
             np.round(free_uh, 3), free_gain, free_corr, np.degrees(np.arccos(abs(free_uh[2])))))
-        print('  roll       : discrepancy %.4f deg/frame rms -> correction rms %.4f deg, peak %.3f' % (
-            r['roll']['discrepancy_rms_deg_per_frame'], r['roll']['correction_rms_deg'], r['roll']['correction_peak_deg']))
+        print('  roll       : defect measured on %.0f %% of the clip -> correction rms %.4f deg, peak %.3f' % (
+            100 * r['roll']['defect_touched_frac'], r['roll']['correction_rms_deg'], r['roll']['correction_peak_deg']))
         for pi_ in pt_info:
             if pi_.get('used') and 'fit_corr' in pi_:
                 print('  pitch/yaw  : %s axis %s corr %.3f; keep above %g Hz %s%s' % (

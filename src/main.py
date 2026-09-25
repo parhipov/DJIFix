@@ -18,8 +18,9 @@ What is fixed (see fix_pipeline.py for the details and the numbers):
      instant (pts) is right to ~1 ms, so the constant is ~0; only the per-frame
      exposure variation is applied (timing.py). The old dbgi alignment
      (+10.5 ms) is available as --timing dbgi for A/B.
-  2. Roll.    DJI's fused roll jitters by ~0.12 deg per frame regardless of the
-     real motion; the roll measured from the image replaces it above 4 Hz.
+  2. Roll.    Where DJI's fused roll is measured to jitter and wobble (some units),
+     the roll measured from the image replaces it above 4 Hz and, on calm
+     frames, at 1-4 Hz; clips without the defect keep their roll untouched.
   3. Pitch/yaw noise. Wiener keep-gain curve, gentle (denoise.py).
   4. Pitch/yaw events. Where the 5-frame image rotation disagrees with the
      telemetry for a sustained stretch and both image estimates agree with each
