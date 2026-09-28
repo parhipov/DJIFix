@@ -25,8 +25,9 @@ telemetry (src/trim_video.py), so it loads in Gyroflow as is; next to it a
 1080p H.264 preview of the original stabilized by Gyroflow (defaults), a plot,
 and a few event-free control segments per clip.
 
-The clips come from a registry (research/clips.json: path, camera, lens
-profile, what the eye says). Expensive steps are cached per clip in --cache:
+The clips come from a registry (artifacts/clips.json, kept with the base and
+out of git: path, camera, lens profile, what the eye says; format in
+research/SEGMENTS.md). Expensive steps are cached per clip in --cache:
 the image pass (src/measure_rotation.py, with the registry's lens profile),
 a Gyroflow render of the original and its residual motion. Event ids are
 clip + source time + type, so verdicts survive a rebuild. The file header is
@@ -552,7 +553,7 @@ def write_csv(rows, path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--registry', default=os.path.join(HERE, 'clips.json'))
+    ap.add_argument('--registry', default=os.path.join(HERE, '..', 'artifacts', 'clips.json'))
     ap.add_argument('--only', nargs='*', help='names from the registry (default: all)')
     ap.add_argument('--out', required=True, help='the segment base')
     ap.add_argument('--cache', required=True, help='per-clip cache: image pass, render of the original, its residual')

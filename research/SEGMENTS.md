@@ -18,10 +18,23 @@ against it tunes against its errors. The eye is the only ground truth we have.
 
 ## Data
 
-`research/clips.json` is the registry: path, camera, drone, lens (and the
+`artifacts/clips.json` is the registry: path, camera, drone, lens (and the
 Gyroflow lens profile when the camera does not wear the lens its telemetry
 describes), firmware, and what the user said about the Gyroflow result
 (`eye`: bad / good / unknown). The build checks every file header against it.
+It lives with the base, out of git (local paths, serial numbers of the units);
+`research/add_clips.py FOLDERS` creates entries from the file headers. Format:
+
+```json
+{"_about": "...",
+ "clips": [
+  {"name": "lite", "path": "D:/clips/DJI_..._0020_D.MP4", "camera": "O4 Lite", "drone": "Meteor65",
+   "lens": "Flywoo O4 Wide", "lens_profile": "lens_profiles/DJI_O4_Air_Flywoo_O4_Wide_lens_normal_4k_4by3_3840x2880.json",
+   "firmware": "01.00.03.00", "serial": "<air unit serial from the header>", "eye": "bad", "note": "..."}]}
+```
+
+`lens_profile` is null for the lens the telemetry describes; `serial` is the air
+unit's, not the camera's.
 
 ## Detectors (`research/diagnose.py`)
 

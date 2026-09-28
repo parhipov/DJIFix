@@ -14,7 +14,8 @@ against the picture rather than assumed:
      on top, the per-frame exposure variation (timing.py).
   2. Roll.    Some units' fused roll jitters by ~0.1 deg per frame and wobbles at
      1-4 Hz regardless of what the camera did. Only where that defect is measured
-     (telemetry-vs-image roll error above 4 Hz, per second), the roll measured
+     (telemetry-vs-image roll error above 4 Hz, per second and over the whole
+     clip), the roll measured
      from the image replaces it: above 4 Hz, and at 1-4 Hz on calm frames away
      from manoeuvres; never where the image is not self-consistent or blurred
      (roll_adaptive). Clips without the defect keep their roll untouched.
@@ -26,6 +27,9 @@ against the picture rather than assumed:
      inside that window (tapered, zero-net so the attitude returns to the
      telemetry afterwards). Between the two image estimates the one closer to the
      telemetry is used: the repair is never larger than what both agree on.
+     Telemetry spikes (one-frame jumps the image does not show) are repaired
+     first. Neither is done where the camera turns faster than 60 deg/s: there
+     the frame is blurred and the image cannot vouch for anything.
 
 The control file (timing only, no content change) is written next to the result
 so an A/B in Gyroflow isolates the content repair from the timing.
@@ -216,7 +220,7 @@ def _band_gain(tel, img, ok, fps, band=(2.0, 4.0), min_run=64, trim=15):
 def roll_adaptive(tel_roll, img_roll, curl_roll, npts, rate, valid, fps, r0_hf=120.0, r0_lf=15.0,
                   lf_band=(1.0, 4.0), fast_deg_s=60.0, fast_pad_s=0.1, calm_ctx_deg_s=30.0, calm_ctx_s=1.0,
                   kc_deg=0.03, min_pts=300, defect_lo=0.018, defect_hi=0.025, defect_k=7, defect_min=5,
-                  defect_reach_s=20):
+                  defect_reach_s=20, defect_clip=True):
     """Roll correction (deg, per frame) from the image, only where DJI's roll defect is measured.
 
     Validated 2026-09-25 by Gyroflow renders on 17 clips and by eye on the Pro sample:
@@ -235,7 +239,14 @@ def roll_adaptive(tel_roll, img_roll, curl_roll, npts, rate, valid, fps, r0_hf=1
         clips without the defect this leaves the roll exactly as it was; requiring the second's
         own value as well cost the defect clip its correction wherever the camera moves. The one clip with the defect
         sits at 0.026-0.041, the 16 without at 0.0065-0.012: without the gate the image's
-        1-4 Hz parallax errors (foliage close to the camera) were pushed into good clips.
+        1-4 Hz parallax errors (foliage close to the camera) were pushed into good clips;
+      - and the same ramp on the median over all calm seconds of the clip (`defect_clip`): the
+        defect belongs to the unit, not to a scene (the defect clip has it on 100 % of its
+        length), while a stretch where the image itself is wrong lifts the local median. On
+        2026-09-28 two of ten new clips without the defect got a local gate that way: a climb
+        past birches (lite39_0005, 1.27 deg, all of it at 1-4 Hz) and a yacht clip over water
+        (cinelog35_0011, 21 % of it). Clip medians: the defect clip 0.026, the 26 others
+        0.004-0.0145; the defect clip's correction is unchanged.
     Returns (theta_roll (N,), gate (N,)).
     """
     from scipy.ndimage import binary_dilation
@@ -271,6 +282,8 @@ def roll_adaptive(tel_roll, img_roll, curl_roll, npts, rate, valid, fps, r0_hf=1
         near = near[np.abs(near - i) <= defect_reach_s]
         if len(near) >= defect_min:
             gate_s[i] = ramp(np.median(per_s[near]))
+    if defect_clip:
+        gate_s *= ramp(np.median(per_s[have])) if len(have) >= defect_min else 0.0
     gate = np.interp(np.arange(n) / fps, np.arange(len(per_s)) + 0.5, gate_s)
     hf = butter(2, [lf_band[1], fps / 2 * 0.992], btype='band', fs=fps, output='sos')
     lf = butter(2, list(lf_band), btype='band', fs=fps, output='sos')
@@ -366,13 +379,17 @@ def window_disagreement(qf, d, fps, gap, rate, fast=40.0, baseline_s=2.0, estima
                 axis_fit_n=int(fit.sum()), wrate=wrate)
 
 
-def detect_spikes(inc, fine, fine_raw, rate, uh, valid, spike_deg=0.35, rate_max=150.0, gap=5):
+def detect_spikes(inc, fine, fine_raw, rate, uh, valid, spike_deg=0.35, rate_max=150.0, gap=5,
+                  rate_cam=None, image_rate_max=60.0):
     """One- or two-frame jumps of the telemetry's pitch/yaw increment that the image does not show.
 
     The Lite at 55.72 s: +1.77 deg in one frame against 0.3 around it, i.e. 88 deg/s
     that never happened; Gyroflow then yanks the frame. Found on the telemetry
     itself (distance from the 5-frame median) and confirmed by the image (gain-
-    normalised and raw) disagreeing with the jump. Returns (spike mask, c_spike
+    normalised and raw) disagreeing with the jump -- only where the camera itself turns
+    slower than `image_rate_max` (`rate_cam`, without the jump): faster, the frame is
+    blurred and its "confirmation" is noise (lite39_0005 at 32 s: two "spikes" removed in a
+    100 deg/s turn left a 1.2 deg offset that the user saw). Returns (spike mask, c_spike
     (N,3) = the correction that puts the frame back on its median, contaminated
     mask = frames whose 5-frame window averages contain a spike).
     """
@@ -390,6 +407,8 @@ def detect_spikes(inc, fine, fine_raw, rate, uh, valid, spike_deg=0.35, rate_max
         w = w - np.outer(w @ uh, uh)
         confirm |= np.sum(w * r, axis=1) < -0.5 * rn ** 2      # the image says the jump did not happen
     spike = (rn >= spike_deg) & confirm & (rate < rate_max) & valid
+    if rate_cam is not None:
+        spike &= rate_cam < image_rate_max
     c_spike = np.where(spike[:, None], -r, 0.0)
     near = np.convolve(spike.astype(int), np.ones(2 * gap + 1, int), mode='same') > 0
     return spike, c_spike, near & ~spike
@@ -398,7 +417,8 @@ def detect_spikes(inc, fine, fine_raw, rate, uh, valid, spike_deg=0.35, rate_max
 def event_correction(delta_pf, reliable_pf, rate, fps, uh, thr_deg=0.10, min_len_s=0.10,
                      margin=3, rate_max=150.0, gain=1.0, inc=None, ratio=0.5, baseline_s=2.0,
                      fine=None, merge_s=0.12, model='image', zero_net=True, fine_alt=None,
-                     spike_deg=0.35, free_net_windows=None, fine_raw=None, spike=None, contaminated=None):
+                     spike_deg=0.35, free_net_windows=None, fine_raw=None, spike=None, contaminated=None,
+                     rate_cam=None, image_rate_max=60.0):
     """Per-frame increment correction (deg) that only touches vetted pitch/yaw events.
 
     delta_pf     per-frame disagreement image - telemetry (deg/frame), NaN = unknown
@@ -412,6 +432,9 @@ def event_correction(delta_pf, reliable_pf, rate, fps, uh, thr_deg=0.10, min_len
     baseline_s   a running median this long is removed from the disagreement
                  first: the parallax bias of forward flight is slow, the events
                  are not.
+    rate_cam     the camera's own rotation rate without telemetry jumps; no event
+                 frame where it reaches `image_rate_max` (blurred image, as in
+                 detect_spikes and roll_adaptive).
     """
     from scipy.ndimage import median_filter
     n = len(delta_pf)
@@ -431,6 +454,8 @@ def event_correction(delta_pf, reliable_pf, rate, fps, uh, thr_deg=0.10, min_len
     dpt = np.where(finite[:, None], filled - base, np.nan)
     mag = np.linalg.norm(np.nan_to_num(dpt), axis=1)
     sel = reliable_pf & finite & (mag >= thr_deg) & (rate < rate_max)
+    if rate_cam is not None:
+        sel &= rate_cam < image_rate_max
     if inc is not None:
         inc_pt = inc - np.outer(inc @ uh, uh)
         sel &= mag >= ratio * np.linalg.norm(inc_pt, axis=1)
@@ -602,7 +627,7 @@ def build(video, image_npz, out_path, timing='image', bias_ms=0.0, r0_roll=40.0,
           r0_pt=80.0, gain=1.0, roll_lo_hz=4.0, hp_hz=1.0, events=True, event_thr=0.10,
           control_path=None, report=True, diagnostics_path=None, roll_axis='z', event_max_deg=0.0,
           event_gain=1.0, unclear_weight=0.0, event_estimator='max', event_fine=True, release_s=1.5,
-          event_model='image', event_zero_net=True, spike_deg=0.35):
+          event_model='image', event_zero_net=True, spike_deg=0.35, image_rate_max=60.0):
     clip, samples, frames, ts, qs = load_sorted(video)
     fps = float(clip.fps)
     n_frames = len(frames)
@@ -647,6 +672,12 @@ def build(video, image_npz, out_path, timing='image', bias_ms=0.0, r0_roll=40.0,
     # last sample. Nothing is corrected or calibrated on those frames.
     valid = ((ft[:-1] + dd[:-1]) >= ts[0]) & ((ft[1:] + dd[1:]) <= ts[-1]) & (rate < 1000.0)
     rate = np.where(valid, rate, 1e6)                      # weights -> 0, fits exclude
+    # the camera's own rate around each frame: a one- or two-frame telemetry jump is itself a
+    # "fast" frame, so the image-based repairs are gated on the 5-frame median of the rate
+    # (of its magnitude, not per axis: increments that flip sign every frame have a per-axis
+    # median near zero although every frame moves ~100 deg/s -- lite39_0005 at 32.2 s)
+    from scipy.ndimage import median_filter
+    rate_cam = median_filter(rate, size=5, mode='nearest')
 
     # ---- 2. roll from the image --------------------------------------------
     # The telemetry frame is the camera frame: the 5-frame homography rotations
@@ -690,7 +721,8 @@ def build(video, image_npz, out_path, timing='image', bias_ms=0.0, r0_roll=40.0,
         fine[~valid] = np.nan
         fine_raw = inc_img - inc
         fine_raw[~valid] = np.nan
-    spike, c_spike, contaminated = detect_spikes(inc, fine, fine_raw, rate, uh, valid, spike_deg=spike_deg) \
+    spike, c_spike, contaminated = detect_spikes(inc, fine, fine_raw, rate, uh, valid, spike_deg=spike_deg,
+                                                 rate_cam=rate_cam, image_rate_max=image_rate_max) \
         if (events and fine is not None) else (np.zeros(n_frames, bool), np.zeros_like(inc), np.zeros(n_frames, bool))
     inc_ds = inc + c_spike                                 # de-spiked telemetry increments
     inc_w = np.where(valid[:, None], inc_ds, 0.0)         # junk frames must not enter the filters
@@ -781,7 +813,8 @@ def build(video, image_npz, out_path, timing='image', bias_ms=0.0, r0_roll=40.0,
                                          gain=gain * event_gain, inc=inc_w,
                                          fine=fine_ds if event_fine else None, fine_alt=fine_alt,
                                          model=event_model, zero_net=event_zero_net,
-                                         spike=spike, contaminated=contaminated)
+                                         spike=spike, contaminated=contaminated,
+                                         rate_cam=rate_cam, image_rate_max=image_rate_max)
     if np.any(c_ev):
         # Independent check of every event against the affine shift channels
         # (another estimator of pitch/yaw from the same frames): sign and gain of
