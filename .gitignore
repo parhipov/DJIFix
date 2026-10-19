@@ -15,3 +15,5 @@ examples/*/*.MP4
 
 # local test clips
 real_videos/
+# downloaded on first run from GitHub Releases (see README)
+utils/dji_join/mp4_merge.exe
